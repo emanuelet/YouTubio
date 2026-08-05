@@ -42,10 +42,9 @@ const ytDlpWrap = new YTDlpWrap();
 const PORT = process.env.PORT ?? 7000;
 const extractors = ytDlpWrap.getExtractors();
 /** @type {Promise<string>} */
-const supportedWebsites = new Promise(async (resolve) =>
-	resolve(
-		`<ul style="list-style-type: none;">${(await extractors).map((extractor) => "<li>" + extractor + "</li>").join("")}</ul>`,
-	),
+const supportedWebsites = extractors.then(
+	(extractors) =>
+		`<ul style="list-style-type: none;">${extractors.map((extractor) => `<li>${extractor}</li>`).join("")}</ul>`,
 );
 
 let counter = 0;
@@ -62,10 +61,11 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
 		.some(Boolean);
 	const cacheKey = url + JSON.stringify(argsArray);
 	const userConfig = decryptConfig(encryptedConfig);
+	const cached = cache.get(cacheKey);
 	if (
 		canCache &&
 		!(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) &&
-		(cached = cache.get(cacheKey))
+		cached
 	)
 		return cached;
 	/** @type {string?} */
@@ -107,7 +107,7 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
 	} finally {
 		try {
 			if (filename) await fs.unlink(filename);
-		} catch (error) {}
+		} catch (_error) {}
 	}
 }
 
@@ -142,7 +142,7 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
 async function runDeArrow(videoID) {
 	if (process.env.NO_DEARROW) throw new Error("DeArrow Error: NO_DEARROW");
 	const res = await fetch(
-		"https://sponsor.ajay.app/api/branding?videoID=" + videoID,
+		`https://sponsor.ajay.app/api/branding?videoID=${videoID}`,
 	);
 	if (!res.ok)
 		throw new Error(`DeArrow Error: ${res.status} ${res.statusText}`);
@@ -271,7 +271,7 @@ async function getSponsorBlockSegments(videoID, encryptedConfig) {
 	if (process.env.NO_SPONSORBLOCK)
 		throw new Error("SponsorBlock Error: NO_SPONSORBLOCK");
 	const res = await fetch(
-		"https://sponsor.ajay.app/api/skipSegments?videoID=" + videoID,
+		`https://sponsor.ajay.app/api/skipSegments?videoID=${videoID}`,
 	);
 	if (!res.ok) {
 		if (res.status !== 404)
@@ -281,13 +281,13 @@ async function getSponsorBlockSegments(videoID, encryptedConfig) {
 	return res.json();
 }
 
-app.addHook("onSend", async (req, reply) => {
+app.addHook("onSend", async (_req, reply) => {
 	reply.header("Access-Control-Allow-Origin", "*");
 	reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 	reply.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 });
 
-app.options("*", async (req, reply) => reply.code(204).send());
+app.options("*", async (_req, reply) => reply.code(204).send());
 
 app.get("/stream/:url", async (req, reply) => {
 	try {
@@ -496,8 +496,6 @@ app.get("/:config/manifest.json", (req, reply) => {
  * @returns {string}
  */
 function toYouTubeURL(userConfig, videoId, query) {
-	/** @type {RegExpMatchArray?} */
-	let temp;
 	const catalogConfig =
 		userConfig.catalogs?.find((cat) => videoId === cat.id) ?? {};
 	if (videoId.startsWith(prefix)) videoId = videoId.slice(prefix.length);
@@ -554,14 +552,16 @@ function toYouTubeURL(userConfig, videoId, query) {
 		].includes(videoId)
 	)
 		return videoId;
-	else if ((temp = videoId.match(channelRegex)?.groups.id))
-		return `https://www.youtube.com/${temp}/videos`;
-	else if ((temp = videoId.match(channelIDRegex)?.groups.id))
-		return `https://www.youtube.com/channel/${temp}/videos`;
-	else if ((temp = videoId.match(playlistIDRegex)?.groups.id))
-		return "https://www.youtube.com/playlist?list=" + temp;
-	else if ((temp = videoId.match(videoIDRegex)?.groups.id))
-		return "https://www.youtube.com/watch?v=" + temp;
+	const channelId = videoId.match(channelRegex)?.groups.id;
+	if (channelId) return `https://www.youtube.com/${channelId}/videos`;
+	const channelIdFromUrl = videoId.match(channelIDRegex)?.groups.id;
+	if (channelIdFromUrl)
+		return `https://www.youtube.com/channel/${channelIdFromUrl}/videos`;
+	const playlistId = videoId.match(playlistIDRegex)?.groups.id;
+	if (playlistId) return `https://www.youtube.com/playlist?list=${playlistId}`;
+	const videoIdFromUrl = videoId.match(videoIDRegex)?.groups.id;
+	if (videoIdFromUrl)
+		return `https://www.youtube.com/watch?v=${videoIdFromUrl}`;
 	else if (isURL(videoId)) return videoId;
 	return `https://www.youtube.com/results?search_query=${encodeURIComponent(videoId)}&sp=${
 		{
@@ -654,6 +654,7 @@ async function parseMeta(
 					new Date(
 						(video.release_timestamp ?? video.timestamp) * 1000,
 					).getFullYear(),
+				10,
 			) || undefined,
 		links: [
 			...(video.channel
@@ -690,7 +691,7 @@ async function handleCatalog(req, reply) {
 		const query = Object.fromEntries(
 			new URLSearchParams(req.params.extra ?? ""),
 		);
-		const skip = parseInt(query.skip ?? 0);
+		const skip = parseInt(query.skip ?? 0, 10);
 		const url = toYouTubeURL(userConfig, req.params.id, query);
 		const videos = await runYtDlpWithAuth(url, req.params.config, [
 			"-I",
@@ -702,7 +703,7 @@ async function handleCatalog(req, reply) {
 		const useID = videos.webpage_url_domain === "youtube.com";
 		const playlist = videos._type === "playlist";
 		const ref = req.headers.referrer;
-		const protocol = ref ? ref + "#" : "stremio://";
+		const protocol = ref ? `${ref}#` : "stremio://";
 		const canCache = [
 			channelRegex,
 			channelIDRegex,
@@ -881,16 +882,19 @@ app.get("/:config/meta/:type/:id.json", async (req, reply) => {
 			useID && (channelRegex.test(video.id) || channelIDRegex.test(video.id));
 		const playlist = video._type === "playlist";
 		const parseDate = (video) => {
-			let r = 0;
-			if ((d = video.release_date ?? video.upload_date))
-				r = `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}T00:00:00Z`;
-			if ((t = video.release_timestamp ?? video.timestamp)) r = t * 1000;
-			return new Date(r).toISOString();
+			const date = video.release_date ?? video.upload_date;
+			const timestamp = video.release_timestamp ?? video.timestamp;
+			const value = timestamp
+				? timestamp * 1000
+				: date
+					? `${date.substring(0, 4)}-${date.substring(4, 6)}-${date.substring(6, 8)}T00:00:00Z`
+					: 0;
+			return new Date(value).toISOString();
 		};
 		const released = parseDate(video);
 		const manifestUrl = toManifestURL(req);
 		const ref = req.headers.referrer;
-		const protocol = ref ? ref + "#" : "stremio://";
+		const protocol = ref ? `${ref}#` : "stremio://";
 		const live = channel
 			? await runYtDlpWithAuth(
 					`https://www.youtube.com/channel/${video.id}/live`,
@@ -975,7 +979,7 @@ app.get("/:config/meta/:type/:id.json", async (req, reply) => {
 				website: video.webpage_url,
 				...(video._type === "playlist"
 					? {}
-					: { behaviorHints: { defaultVideoId: req.params.id + ":1:1" } }),
+					: { behaviorHints: { defaultVideoId: `${req.params.id}:1:1` } }),
 			},
 		});
 	} catch (error) {
@@ -996,7 +1000,7 @@ app.get("/:config/stream/:type/:id.json", async (req, reply) => {
 			["-I", ":1", "--no-playlist"],
 		);
 		const ref = req.headers.referrer;
-		const protocol = ref ? ref + "#" : "stremio://";
+		const protocol = ref ? `${ref}#` : "stremio://";
 		return reply.send({
 			streams: await parseStream(
 				userConfig,
@@ -1027,7 +1031,7 @@ app.get("/:config/subtitles/:type/:id.json", async (req, reply) => {
 		return reply.send({
 			subtitles: [
 				...Object.entries(video.subtitles ?? {}).map(([k, v]) => {
-					const srt = v.find((x) => x.ext == "srt") ?? v[0];
+					const srt = v.find((x) => x.ext === "srt") ?? v[0];
 					return srt
 						? {
 								id: srt.name,
@@ -1037,7 +1041,7 @@ app.get("/:config/subtitles/:type/:id.json", async (req, reply) => {
 						: null;
 				}),
 				...Object.entries(video.automatic_captions ?? {}).map(([k, v]) => {
-					const srt = v.find((x) => x.ext == "srt") ?? v[0];
+					const srt = v.find((x) => x.ext === "srt") ?? v[0];
 					return srt
 						? {
 								id: `Auto ${srt.name}`,
@@ -1619,7 +1623,7 @@ app.get("/", configurationPage);
 app.get("/:config/configure", configurationPage);
 
 // Error Handling Middleware
-app.setErrorHandler((error, req, reply) => {
+app.setErrorHandler((error, _req, reply) => {
 	logError(error);
 	if (!reply.sent)
 		reply
@@ -1648,7 +1652,7 @@ app
 				);
 		}
 		console.log(
-			`Access the configuration page at: ${process.env.SPACE_HOST ? "https://" + process.env.SPACE_HOST : "http://localhost:" + PORT}`,
+			`Access the configuration page at: ${process.env.SPACE_HOST ? `https://${process.env.SPACE_HOST}` : `http://localhost:${PORT}`}`,
 		);
 	})
 	.catch((error) => {
