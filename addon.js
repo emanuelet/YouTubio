@@ -1,66 +1,90 @@
 #!/usr/bin/env node
 
-const VERSION = require('./package.json').version;
-const express = require('express');
-const YTDlpWrap = require('yt-dlp-wrap').default;
-const fs = require('fs').promises;
-const path = require('path');
-const crypto = require('crypto');
-const cache = new (require('node-cache'))({ stdTTL: process.env.TTL ?? 3600, useClones: false });  // Cache for 1 hour
-// const util = require('util');
+const VERSION = require("./package.json").version;
+const app = require("fastify")({
+  trustProxy: true,
+  logger: process.env.DEV_LOGGING ? { level: "debug" } : false,
+  // Encrypted configuration is encoded in the Stremio URL path.
+  routerOptions: { maxParamLength: 65_536 },
+});
+const closeWithGrace = require("close-with-grace");
+const YTDlpWrap = require("yt-dlp-wrap-plus").default;
+const fs = require("fs").promises;
+const path = require("path");
+const crypto = require("crypto");
+const cache = new (require("node-cache"))({
+  stdTTL: process.env.TTL ?? 3600,
+  useClones: false,
+}); // Cache for 1 hour
 
-const tmpdir = require('os').tmpdir();
+const tmpdir = require("os").tmpdir();
 const ytDlpWrap = new YTDlpWrap();
 /** @type {number} */
 const PORT = process.env.PORT ?? 7000;
-const prefix = 'yt_id:';
-const reversedPrefix = 'Reversed';
-const channelRegex = /^(https:\/\/(www\.)?youtube\.com\/)?(?<id>@[a-zA-Z0-9][a-zA-Z0-9\._-]{1,28}[a-zA-Z0-9])/;
-const channelIDRegex = /^(https:\/\/(www\.)?youtube\.com\/channel\/)?(?<id>UC[A-Za-z0-9_-]{21}[AQgw])/
-const playlistIDRegex = /^(https:\/\/(www\.)?youtube\.com\/playlist\?list=)?(?<id>PL([0-9A-F]{16}|[A-Za-z0-9_-]{32}))/;
-const videoIDRegex = /^(https:\/\/(www\.)?(youtube\.com|youtu\.be)(\/(watch|shorts|v|e(mbed)?|redirect))?(\?v=|\/))?(?<id>[A-Za-z0-9_-]{10}[AEIMQUYcgkosw048])/;
-const channelTypeArray = [
-    'auto',
-    'video',
-    'channel'
-];
+const prefix = "yt_id:";
+const reversedPrefix = "Reversed";
+const channelRegex =
+  /^(https:\/\/(www\.)?youtube\.com\/)?(?<id>@[a-zA-Z0-9][a-zA-Z0-9\._-]{1,28}[a-zA-Z0-9])/;
+const channelIDRegex =
+  /^(https:\/\/(www\.)?youtube\.com\/channel\/)?(?<id>UC[A-Za-z0-9_-]{21}[AQgw])/;
+const playlistIDRegex =
+  /^(https:\/\/(www\.)?youtube\.com\/playlist\?list=)?(?<id>PL([0-9A-F]{16}|[A-Za-z0-9_-]{32}))/;
+const videoIDRegex =
+  /^(https:\/\/(www\.)?(youtube\.com|youtu\.be)(\/(watch|shorts|v|e(mbed)?|redirect))?(\?v=|\/))?(?<id>[A-Za-z0-9_-]{10}[AEIMQUYcgkosw048])/;
+const channelTypeArray = ["auto", "video", "channel"];
 const defaultConfig = {
-    fallback: true,
-    overestimate: false,
-    markWatchedOnLoad: false,
-    showBrokenLinks: false,
-    search: true,
-    catalogType: 'YouTube',
-    geminiModel: 'gemini-2.5-pro'
+  fallback: true,
+  overestimate: false,
+  markWatchedOnLoad: false,
+  showBrokenLinks: false,
+  search: true,
+  catalogType: "YouTube",
+  geminiModel: "gemini-2.5-pro",
 };
-const termKeyword = '{term}';
-const sortKeyword = '{sort}';
+const termKeyword = "{term}";
+const sortKeyword = "{sort}";
 
 /** @type {Buffer} */
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ? Buffer.from(process.env.ENCRYPTION_KEY, 'base64') : crypto.randomBytes(32);
-const ALGORITHM = 'aes-256-gcm';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
+  ? Buffer.from(process.env.ENCRYPTION_KEY, "base64")
+  : crypto.randomBytes(32);
+const ALGORITHM = "aes-256-gcm";
 
 const extractors = ytDlpWrap.getExtractors();
 /** @type {Promise<string>} */
-const supportedWebsites = new Promise(async resolve =>
-    resolve(`<ul style="list-style-type: none;">${(await extractors).map(extractor => '<li>' + extractor + '</li>').join('')}</ul>`)
+const supportedWebsites = new Promise(async (resolve) =>
+  resolve(
+    `<ul style="list-style-type: none;">${(await extractors).map((extractor) => "<li>" + extractor + "</li>").join("")}</ul>`,
+  ),
 );
 
 /** Encrypts text using AES-256-GCM
  * @param {string} text
  * @returns {string}
-*/
+ */
 function encrypt(text) {
-    const salt = crypto.randomBytes(16);
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv(
-        ALGORITHM,
-        crypto.createHash('sha256').update(Buffer.concat([ENCRYPTION_KEY, salt])).digest(),
-        iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const authTag = cipher.getAuthTag();
-    return salt.toString('hex') + ':' + iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(
+    ALGORITHM,
+    crypto
+      .createHash("sha256")
+      .update(Buffer.concat([ENCRYPTION_KEY, salt]))
+      .digest(),
+    iv,
+  );
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag();
+  return (
+    salt.toString("hex") +
+    ":" +
+    iv.toString("hex") +
+    ":" +
+    authTag.toString("hex") +
+    ":" +
+    encrypted
+  );
 }
 
 /**
@@ -69,20 +93,24 @@ function encrypt(text) {
  * @returns {string}
  */
 function decrypt(encryptedData) {
-    const parts = encryptedData.split(':');
-    if (parts.length !== 4) throw new Error('Invalid encrypted data format');
-    const salt = Buffer.from(parts[0], 'hex');
-    const iv = Buffer.from(parts[1], 'hex');
-    const authTag = Buffer.from(parts[2], 'hex');
-    const encrypted = parts[3];
-    const decipher = crypto.createDecipheriv(
-        ALGORITHM,
-        crypto.createHash('sha256').update(Buffer.concat([ENCRYPTION_KEY, salt])).digest(),
-        iv);
-    decipher.setAuthTag(authTag);
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+  const parts = encryptedData.split(":");
+  if (parts.length !== 4) throw new Error("Invalid encrypted data format");
+  const salt = Buffer.from(parts[0], "hex");
+  const iv = Buffer.from(parts[1], "hex");
+  const authTag = Buffer.from(parts[2], "hex");
+  const encrypted = parts[3];
+  const decipher = crypto.createDecipheriv(
+    ALGORITHM,
+    crypto
+      .createHash("sha256")
+      .update(Buffer.concat([ENCRYPTION_KEY, salt]))
+      .digest(),
+    iv,
+  );
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encrypted, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
 }
 
 let counter = 0;
@@ -94,41 +122,58 @@ let counter = 0;
  * @returns {Promise<Object>}
  */
 async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
-    const canCache = [channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex].map(r => r.test(url)).some(Boolean);
-    const cacheKey = url + JSON.stringify(argsArray);
-    const userConfig = decryptConfig(encryptedConfig);
-    if (canCache && !(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) && (cached = cache.get(cacheKey))) return cached;
-    /** @type {string?} */
-    const cookies = userConfig.encrypted?.auth;
-    /** @type {string?} */
-    const filename = cookies ? path.join(tmpdir, `cookies-${Date.now()}-${counter++}.txt`) : null;
-    counter %= Number.MAX_SAFE_INTEGER;
+  const canCache = [channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex]
+    .map((r) => r.test(url))
+    .some(Boolean);
+  const cacheKey = url + JSON.stringify(argsArray);
+  const userConfig = decryptConfig(encryptedConfig);
+  if (
+    canCache &&
+    !(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) &&
+    (cached = cache.get(cacheKey))
+  )
+    return cached;
+  /** @type {string?} */
+  const cookies = userConfig.encrypted?.auth;
+  /** @type {string?} */
+  const filename = cookies
+    ? path.join(tmpdir, `cookies-${Date.now()}-${counter++}.txt`)
+    : null;
+  counter %= Number.MAX_SAFE_INTEGER;
+  try {
+    if (filename) await fs.writeFile(filename, cookies);
+    const r = JSON.parse(
+      await ytDlpWrap.execPromise([
+        ...argsArray,
+        (userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad)
+          ? "--mark-watched"
+          : "--no-mark-watched",
+        url,
+        "--js-runtimes",
+        "node",
+        "-i",
+        "--no-plugin-dirs",
+        "--flat-playlist",
+        "--no-cache-dir",
+        "--no-warnings",
+        "--ignore-no-formats-error",
+        "-J",
+        "--ies",
+        process.env.YTDLP_EXTRACTORS ?? "all",
+        "--extractor-args",
+        "generic:impersonate",
+        "--compat-options",
+        "no-youtube-channel-redirect",
+        ...(cookies ? ["--cookies", filename] : []),
+      ]),
+    );
+    if (canCache) cache.set(cacheKey, r);
+    return r;
+  } finally {
     try {
-        if (filename) await fs.writeFile(filename, cookies);
-        const r = JSON.parse(await ytDlpWrap.execPromise([
-            ...argsArray,
-            userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad ? '--mark-watched' : '--no-mark-watched',
-            url,
-            '--js-runtimes', 'node',
-            '-i',
-            '--no-plugin-dirs',
-            '--flat-playlist',
-            '--no-cache-dir',
-            '--no-warnings',
-            '--ignore-no-formats-error',
-            '-J',
-            '--ies', process.env.YTDLP_EXTRACTORS ?? 'all',
-            '--extractor-args', 'generic:impersonate',
-            '--compat-options', 'no-youtube-channel-redirect',
-            ...(cookies ? ['--cookies', filename] : [])
-        ]));
-        if (canCache) cache.set(cacheKey, r);
-        return r;
-    } finally {
-        try {
-            if (filename) await fs.unlink(filename);
-        } catch (error) { }
-    }
+      if (filename) await fs.unlink(filename);
+    } catch (error) {}
+  }
 }
 
 /**
@@ -160,10 +205,13 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
  * @returns {Promise<DeArrowResponse>}
  */
 async function runDeArrow(videoID) {
-    if (process.env.NO_DEARROW) throw new Error('DeArrow Error: NO_DEARROW');
-    const res = await fetch('https://sponsor.ajay.app/api/branding?videoID=' + videoID);
-    if (!res.ok) throw new Error(`DeArrow Error: ${res.status} ${res.statusText}`);
-    return res.json();
+  if (process.env.NO_DEARROW) throw new Error("DeArrow Error: NO_DEARROW");
+  const res = await fetch(
+    "https://sponsor.ajay.app/api/branding?videoID=" + videoID,
+  );
+  if (!res.ok)
+    throw new Error(`DeArrow Error: ${res.status} ${res.statusText}`);
+  return res.json();
 }
 
 /**
@@ -173,7 +221,7 @@ async function runDeArrow(videoID) {
  * @returns {string}
  */
 function getDeArrowThumbnail(videoID, time) {
-    return `https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=${videoID}&time=${time}`;
+  return `https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=${videoID}&time=${time}`;
 }
 
 /**
@@ -196,79 +244,86 @@ function getDeArrowThumbnail(videoID, time) {
  * @returns {Promise<Array<SponsorBlockSegment>>}
  */
 async function getGeminiSegments(encryptedConfig, URL) {
-    const userConfig = decryptConfig(encryptedConfig);
-    const geminiModel = userConfig.geminiModel ?? defaultConfig.geminiModel;
-    const geminiKey = userConfig.encrypted?.gemini;
-    if (geminiModel && geminiKey)
-        return JSON.parse((await (await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`, {
-            method: 'POST',
-            body: JSON.stringify({
+  const userConfig = decryptConfig(encryptedConfig);
+  const geminiModel = userConfig.geminiModel ?? defaultConfig.geminiModel;
+  const geminiKey = userConfig.encrypted?.gemini;
+  if (geminiModel && geminiKey)
+    return JSON.parse(
+      (
+        await (
+          await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`,
+            {
+              method: "POST",
+              body: JSON.stringify({
                 system_instruction: {
-                    parts: {
-                        text: 'Analyze the video contents and provide SponsorBlock-like metadata for video segments a user may not want to see where segment is an (int, int) with the values respectively being start and end time in seconds and the description being additional category acting as a section subtitle. There should be an empty Array response if no such sponsor segments exist within the video',
-                    },
+                  parts: {
+                    text: "Analyze the video contents and provide SponsorBlock-like metadata for video segments a user may not want to see where segment is an (int, int) with the values respectively being start and end time in seconds and the description being additional category acting as a section subtitle. There should be an empty Array response if no such sponsor segments exist within the video",
+                  },
                 },
-                contents: [{
+                contents: [
+                  {
                     parts: [
-                        {
-                            file_data: {
-                                file_uri: URL
-                            }
-                        }
-                    ]
-                }],
-                generationConfig: {
-                    response_mime_type: 'application/json',
-                    response_schema: {
-                        type: 'object',
-                        properties: {
-                            segments: {
-                                type: 'array',
-                                items: {
-                                    type: 'object',
-                                    properties: {
-                                        segment: {
-                                            type: 'array',
-                                            items: {
-                                                type: 'number'
-                                            }
-                                        },
-                                        category: {
-                                            type: 'string',
-                                            enum: [
-                                                'sponsor',
-                                                'selfpromo',
-                                                'interaction',
-                                                'intro',
-                                                'outro',
-                                                'preview',
-                                                'hook',
-                                                'filler'
-                                            ]
-                                        },
-                                        description: {
-                                            type: 'string'
-                                        }
-                                    },
-                                    propertyOrdering: [
-                                        'segment',
-                                        'category',
-                                        'description'
-                                    ],
-                                    required: [
-                                        'description'
-                                    ]
-                                }
-                            }
+                      {
+                        file_data: {
+                          file_uri: URL,
                         },
-                        propertyOrdering: [
-                            'segments'
-                        ]
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  response_mime_type: "application/json",
+                  response_schema: {
+                    type: "object",
+                    properties: {
+                      segments: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            segment: {
+                              type: "array",
+                              items: {
+                                type: "number",
+                              },
+                            },
+                            category: {
+                              type: "string",
+                              enum: [
+                                "sponsor",
+                                "selfpromo",
+                                "interaction",
+                                "intro",
+                                "outro",
+                                "preview",
+                                "hook",
+                                "filler",
+                              ],
+                            },
+                            description: {
+                              type: "string",
+                            },
+                          },
+                          propertyOrdering: [
+                            "segment",
+                            "category",
+                            "description",
+                          ],
+                          required: ["description"],
+                        },
+                      },
                     },
+                    propertyOrdering: ["segments"],
+                  },
                 },
-            }),
-        })).json()).candidates?.[0].content?.parts[0].text ?? '[]').segments;
-    return [];
+              }),
+            },
+          )
+        ).json()
+      ).candidates?.[0].content?.parts[0].text ?? "[]",
+    ).segments;
+  return [];
 }
 
 /**
@@ -278,13 +333,17 @@ async function getGeminiSegments(encryptedConfig, URL) {
  * @returns {Promise<Array<SponsorBlockSegment>>}
  */
 async function getSponsorBlockSegments(videoID, encryptedConfig) {
-    if (process.env.NO_SPONSORBLOCK) throw new Error('SponsorBlock Error: NO_SPONSORBLOCK');
-    const res = await fetch('https://sponsor.ajay.app/api/skipSegments?videoID=' + videoID);
-    if (!res.ok) {
-        if (res.status !== 404) throw new Error(`SponsorBlock Error: ${res.status} ${res.statusText}`);
-        return getGeminiSegments(encryptedConfig, toYouTubeURL({}, videoID, {}));
-    }
-    return res.json();
+  if (process.env.NO_SPONSORBLOCK)
+    throw new Error("SponsorBlock Error: NO_SPONSORBLOCK");
+  const res = await fetch(
+    "https://sponsor.ajay.app/api/skipSegments?videoID=" + videoID,
+  );
+  if (!res.ok) {
+    if (res.status !== 404)
+      throw new Error(`SponsorBlock Error: ${res.status} ${res.statusText}`);
+    return getGeminiSegments(encryptedConfig, toYouTubeURL({}, videoID, {}));
+  }
+  return res.json();
 }
 
 /**
@@ -295,100 +354,105 @@ async function getSponsorBlockSegments(videoID, encryptedConfig) {
  * @returns {string} Cut m3u8 content
  */
 function cutM3U8(body, ranges = [], overestimate = false) {
-    if (!ranges?.length) return body;
-    const lines = body.split('\n');
-    let time = 0;
-    const out = [];
-    let discontinuity = false;
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line.startsWith('#EXTINF:')) {
-            const segStart = time;
-            const segEnd = time + parseFloat(line.split(':')[1]);
-            time = segEnd;
-            if (!ranges.some(([start, end]) =>
-                overestimate
-                    ? !(segEnd <= start || segStart >= end)
-                    : segStart >= start && segEnd <= end
-            )) {
-                if (discontinuity) {
-                    out.push('#EXT-X-DISCONTINUITY');
-                    discontinuity = false;
-                }
-                out.push(line);
-                out.push((lines[i + 1] || '').trim());
-            } else
-                discontinuity = true;
-            i++;  // skip URI line
-        } else if (line) out.push(line);
-    }
-    return out.join('\n');
+  if (!ranges?.length) return body;
+  const lines = body.split("\n");
+  let time = 0;
+  const out = [];
+  let discontinuity = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith("#EXTINF:")) {
+      const segStart = time;
+      const segEnd = time + parseFloat(line.split(":")[1]);
+      time = segEnd;
+      if (
+        !ranges.some(([start, end]) =>
+          overestimate
+            ? !(segEnd <= start || segStart >= end)
+            : segStart >= start && segEnd <= end,
+        )
+      ) {
+        if (discontinuity) {
+          out.push("#EXT-X-DISCONTINUITY");
+          discontinuity = false;
+        }
+        out.push(line);
+        out.push((lines[i + 1] || "").trim());
+      } else discontinuity = true;
+      i++; // skip URI line
+    } else if (line) out.push(line);
+  }
+  return out.join("\n");
 }
 
-const app = express();
-app.set('trust proxy', true);
-
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-
-app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (req.method === 'OPTIONS')
-        return res.sendStatus(204);
-    return next();
+app.addHook("onSend", async (req, reply) => {
+  reply.header("Access-Control-Allow-Origin", "*");
+  reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  reply.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 });
 
-app.get('/stream/:url', async (req, res, next) => {
-    try {
-        const header = (await fetch(req.params.url, { method: 'HEAD' })).headers.get('content-type');
-        let content;
-        switch (header) {
-        case 'application/vnd.apple.mpegurl':
-        case 'application/x-mpegURL':
-            content = await (await fetch(req.params.url)).text();
-            try {
-                content = cutM3U8(content,
-                    JSON.parse(req.query.ranges ?? '[]'),
-                    JSON.parse(req.query.overestimate ?? defaultConfig.overestimate));
-            } catch (error) {
-                if (!JSON.parse(req.query.fallback ?? defaultConfig.fallback)) throw error;
-            }
-            break;
-        default:
-            throw new Error(`Unknown header type: "${header}"`)
+app.options("*", async (req, reply) => reply.code(204).send());
+
+app.get("/stream/:url", async (req, reply) => {
+  try {
+    const header = (
+      await fetch(req.params.url, { method: "HEAD" })
+    ).headers.get("content-type");
+    let content;
+    switch (header) {
+      case "application/vnd.apple.mpegurl":
+      case "application/x-mpegURL":
+        content = await (await fetch(req.params.url)).text();
+        try {
+          content = cutM3U8(
+            content,
+            JSON.parse(req.query.ranges ?? "[]"),
+            JSON.parse(req.query.overestimate ?? defaultConfig.overestimate),
+          );
+        } catch (error) {
+          if (!JSON.parse(req.query.fallback ?? defaultConfig.fallback))
+            throw error;
         }
-        res.set('Content-Type', header);
-        return res.send(content);
-    } catch (error) {
-        res.status(500).send('Cutting stream failed');
-        return next(error);
+        break;
+      default:
+        throw new Error(`Unknown header type: "${header}"`);
     }
+    return reply.type(header).send(content);
+  } catch (error) {
+    logError(error);
+    return reply.code(500).send("Cutting stream failed");
+  }
 });
 
 // Config Encryption Endpoint
-app.post('/encrypt', (req, res, next) => {
-    try {
-        return res.send(encrypt(JSON.stringify(req.body)));
-    } catch (error) {
-        res.status(500).send('Encryption failed');
-        return next(error);
-    }
+app.post("/encrypt", (req, reply) => {
+  try {
+    return reply.send(encrypt(JSON.stringify(req.body)));
+  } catch (error) {
+    logError(error);
+    return reply.code(500).send("Encryption failed");
+  }
 });
 
 // Get YouTube Playlists Endpoint
-app.get('/:config/playlists', async (req, res, next) => {
-    try {
-        return res.json((await runYtDlpWithAuth('https://www.youtube.com/feed/playlists', req.params.config, ['--yes-playlist']))
-            .entries.map(x => ({
-                id: x.url,
-                name: x.title
-            })));
-    } catch (error) {
-        res.status(500).send('Fetching playlists failed');
-        return next(error);
-    }
+app.get("/:config/playlists", async (req, reply) => {
+  try {
+    return reply.send(
+      (
+        await runYtDlpWithAuth(
+          "https://www.youtube.com/feed/playlists",
+          req.params.config,
+          ["--yes-playlist"],
+        )
+      ).entries.map((x) => ({
+        id: x.url,
+        name: x.title,
+      })),
+    );
+  } catch (error) {
+    logError(error);
+    return reply.code(500).send("Fetching playlists failed");
+  }
 });
 
 /**
@@ -397,7 +461,7 @@ app.get('/:config/playlists', async (req, res, next) => {
  * @returns {void}
  */
 function logError(error) {
-    if (process.env.DEV_LOGGING) console.error(error);
+  if (process.env.DEV_LOGGING) console.error(error);
 }
 
 // Config Decryption
@@ -408,19 +472,31 @@ function logError(error) {
  * @returns {Object}
  */
 function decryptConfig(encryptedConfig, enableDecryption = true) {
-    /** @type {Object} */
-    const config = typeof encryptedConfig === 'string' ? JSON.parse(encryptedConfig) : encryptedConfig;
-    if (enableDecryption && config.encrypted && typeof config.encrypted === 'string') {
-        try {
-            config.encrypted = JSON.parse(decrypt(config.encrypted));
-        } catch (error) {
-            // logError(error);
-            delete config.encrypted;
-        }
+  /** @type {Object} */
+  const config =
+    typeof encryptedConfig === "string"
+      ? JSON.parse(encryptedConfig)
+      : encryptedConfig;
+  if (
+    enableDecryption &&
+    config.encrypted &&
+    typeof config.encrypted === "string"
+  ) {
+    try {
+      config.encrypted = JSON.parse(decrypt(config.encrypted));
+    } catch (error) {
+      // logError(error);
+      delete config.encrypted;
     }
-    if (typeof encryptedConfig === 'string')
-        config.catalogs?.forEach(c => c.channelType = /[0-9]+/.test(c.channelType) ? channelTypeArray[c.channelType] : c.channelType);
-    return config;
+  }
+  if (typeof encryptedConfig === "string")
+    config.catalogs?.forEach(
+      (c) =>
+        (c.channelType = /[0-9]+/.test(c.channelType)
+          ? channelTypeArray[c.channelType]
+          : c.channelType),
+    );
+  return config;
 }
 
 /**
@@ -429,97 +505,126 @@ function decryptConfig(encryptedConfig, enableDecryption = true) {
  * @returns {boolean}
  */
 function isURL(s) {
-    try {
-        return Boolean(new URL(s));
-    } catch {
-        return false;
-    }
+  try {
+    return Boolean(new URL(s));
+  } catch {
+    return false;
+  }
 }
 
 // Stremio Addon Manifest Route
-app.get('/:config/manifest.json', (req, res, next) => {
-    try {
-        const userConfig = decryptConfig(req.params.config, false);
-        const canGenre = /** @param {Object} c */ (c) => {
-            if (c.channelType !== 'auto') return true;
-            const id = c.id?.startsWith(prefix) ? c.id.slice(prefix.length) : c.id ?? '';
-            if ([':ytfav', ':ytwatchlater', ':ytsubs', ':ythistory', ':ytrec', ':ytnotif'].includes(id)) return false;
-            if (channelRegex.test(id)) return false;
-            if (channelIDRegex.test(id)) return false;
-            if (playlistIDRegex.test(id)) return false;
-            if (videoIDRegex.test(id)) return false;
-            if ([':ytsearch', ':ytsearch:channel'].includes(id)) return true;
-            if (id.startsWith('https://www.youtube.com/results?search_query=')) return true;
-            return !isURL(id);
-        }
-        const catalogs = [
-            ...(userConfig.catalogs?.map(c => ({
-                ...c, extra: [
-                    ...(c.extra ?? []),
-                    ...(c.channelType === 'auto' &&
-                        (c.id.includes(termKeyword) || [':ytsearch', ':ytsearch:channel'].includes(c.id.startsWith(prefix) ? c.id.slice(prefix.length) : c.id)) ?
-                        [{ name: 'search', isRequired: true }] : [])
-                ]
-                // Add defaults if cookies were provided
-            })) ?? (userConfig.encrypted ? [
-                { id: ':ytrec', name: 'Discover' },
-                { id: ':ytsubs', name: 'Subscriptions' },
-                { id: ':ytwatchlater', name: 'Watch Later' },
-                { id: ':ythistory', name: 'History' }
-                // Add search unless explicitly disabled
-            ] : [])), ...((userConfig.search ?? defaultConfig.search) ? [
-                { id: ':ytsearch', name: 'Video' },
-                { id: ':ytsearch:channel', name: 'Channel' }
-            ] : []).map(c => ({
-                ...c, extra: [
-                    ...(c.extra ?? []),
-                    { name: 'search', isRequired: true },
-                ]
-            }))
-        ].map(c => ({
-            ...c,
-            id: c.id?.startsWith(prefix) ? c.id : prefix + (c.id ?? ''),
-            type: c.type ?? userConfig.catalogType ?? defaultConfig.catalogType,
-            extra: [
-                ...(
-                    c.extra ?? []
-                ), {
-                    name: 'genre',
-                    isRequired: false,
-                    options: [
-                        '',
-                        // Add YouTube sorting options if none provided
-                        ...(c.sortOrder?.map(s => s.name) ?? (canGenre(c) ? ['Relevance', 'Upload Date', 'View Count', 'Rating'] : []))
-                    ].flatMap(x => [x, `${reversedPrefix} ${x}`.trim()])  // Create reversed of each option
-                        .slice(1)  // Remove default sorting option
-                }, {
-                    name: 'skip',
-                    isRequired: false
-                }
+app.get("/:config/manifest.json", (req, reply) => {
+  try {
+    const userConfig = decryptConfig(req.params.config, false);
+    const canGenre = /** @param {Object} c */ (c) => {
+      if (c.channelType !== "auto") return true;
+      const id = c.id?.startsWith(prefix)
+        ? c.id.slice(prefix.length)
+        : (c.id ?? "");
+      if (
+        [
+          ":ytfav",
+          ":ytwatchlater",
+          ":ytsubs",
+          ":ythistory",
+          ":ytrec",
+          ":ytnotif",
+        ].includes(id)
+      )
+        return false;
+      if (channelRegex.test(id)) return false;
+      if (channelIDRegex.test(id)) return false;
+      if (playlistIDRegex.test(id)) return false;
+      if (videoIDRegex.test(id)) return false;
+      if ([":ytsearch", ":ytsearch:channel"].includes(id)) return true;
+      if (id.startsWith("https://www.youtube.com/results?search_query="))
+        return true;
+      return !isURL(id);
+    };
+    const catalogs = [
+      ...(userConfig.catalogs?.map((c) => ({
+        ...c,
+        extra: [
+          ...(c.extra ?? []),
+          ...(c.channelType === "auto" &&
+          (c.id.includes(termKeyword) ||
+            [":ytsearch", ":ytsearch:channel"].includes(
+              c.id.startsWith(prefix) ? c.id.slice(prefix.length) : c.id,
+            ))
+            ? [{ name: "search", isRequired: true }]
+            : []),
+        ],
+        // Add defaults if cookies were provided
+      })) ??
+        (userConfig.encrypted
+          ? [
+              { id: ":ytrec", name: "Discover" },
+              { id: ":ytsubs", name: "Subscriptions" },
+              { id: ":ytwatchlater", name: "Watch Later" },
+              { id: ":ythistory", name: "History" },
+              // Add search unless explicitly disabled
             ]
-        }));
-        return res.json({
-            id: 'youtubio.elfhosted.com',
-            version: VERSION,
-            name: 'YouTubio | ElfHosted',
-            description: 'Watch YouTube videos, subscriptions, watch later, and history in Stremio.',
-            resources: ['catalog', 'stream', 'meta', 'subtitles'],
-            types: [...new Set(catalogs.map(c => c.type))],
-            idPrefixes: [prefix],
-            catalogs,
-            logo: `https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? 'main' : `v${VERSION}`}/icon.png?raw=true`,
-            behaviorHints: {
-                configurable: true
-            },
-            stremioAddonsConfig: {
-                issuer: "https://stremio-addons.net",
-                signature: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..tLliZZqbqp8DSpNFCa_o7g.1Zu-sGRA8Xmc-qG9d_ctvcvrbtBFdVH8Kqmj9RL-ONB5C5iiy5qITOH3Z1nrTfQuiIhwJyQuU0npD0S8lYtv5InjpulZHYQDdBJpPnTvn1jqwM4AgDPCpm05lNLYW3Kp.IpryYoO1JqXwFBmkHrD3OA"
-            }
-        });
-    } catch (error) {
-        res.json({});
-        return next(error);
-    }
+          : [])),
+      ...((userConfig.search ?? defaultConfig.search)
+        ? [
+            { id: ":ytsearch", name: "Video" },
+            { id: ":ytsearch:channel", name: "Channel" },
+          ]
+        : []
+      ).map((c) => ({
+        ...c,
+        extra: [...(c.extra ?? []), { name: "search", isRequired: true }],
+      })),
+    ].map((c) => ({
+      ...c,
+      id: c.id?.startsWith(prefix) ? c.id : prefix + (c.id ?? ""),
+      type: c.type ?? userConfig.catalogType ?? defaultConfig.catalogType,
+      extra: [
+        ...(c.extra ?? []),
+        {
+          name: "genre",
+          isRequired: false,
+          options: [
+            "",
+            // Add YouTube sorting options if none provided
+            ...(c.sortOrder?.map((s) => s.name) ??
+              (canGenre(c)
+                ? ["Relevance", "Upload Date", "View Count", "Rating"]
+                : [])),
+          ]
+            .flatMap((x) => [x, `${reversedPrefix} ${x}`.trim()]) // Create reversed of each option
+            .slice(1), // Remove default sorting option
+        },
+        {
+          name: "skip",
+          isRequired: false,
+        },
+      ],
+    }));
+    return reply.send({
+      id: "youtubio.elfhosted.com",
+      version: VERSION,
+      name: "YouTubio | ElfHosted",
+      description:
+        "Watch YouTube videos, subscriptions, watch later, and history in Stremio.",
+      resources: ["catalog", "stream", "meta", "subtitles"],
+      types: [...new Set(catalogs.map((c) => c.type))],
+      idPrefixes: [prefix],
+      catalogs,
+      logo: `https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true`,
+      behaviorHints: {
+        configurable: true,
+      },
+      stremioAddonsConfig: {
+        issuer: "https://stremio-addons.net",
+        signature:
+          "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..tLliZZqbqp8DSpNFCa_o7g.1Zu-sGRA8Xmc-qG9d_ctvcvrbtBFdVH8Kqmj9RL-ONB5C5iiy5qITOH3Z1nrTfQuiIhwJyQuU0npD0S8lYtv5InjpulZHYQDdBJpPnTvn1jqwM4AgDPCpm05lNLYW3Kp.IpryYoO1JqXwFBmkHrD3OA",
+      },
+    });
+  } catch (error) {
+    logError(error);
+    return reply.send({});
+  }
 });
 
 /**
@@ -530,57 +635,92 @@ app.get('/:config/manifest.json', (req, res, next) => {
  * @returns {string}
  */
 function toYouTubeURL(userConfig, videoId, query) {
-    /** @type {RegExpMatchArray?} */
-    let temp;
-    const catalogConfig = userConfig.catalogs?.find(cat => videoId === cat.id) ?? {};
-    if (videoId.startsWith(prefix)) videoId = videoId.slice(prefix.length);
-    /** @type {string} */
-    const genre = (query.genre?.startsWith(reversedPrefix) ? query.genre.slice(reversedPrefix.length) : query.genre)?.trim() ?? 'Relevance';
-    if (catalogConfig.channelType === 'video' || videoId === ':ytsearch')
-        return `https://www.youtube.com/results?search_query=${encodeURIComponent(query.search ?? '')}&sp=${{
-            'Relevance': 'CAASAhAB',
-            'Upload Date': 'CAISAhAB',
-            'View Count': 'CAMSAhAB',
-            'Rating': 'CAESAhAB'
-        }[genre]}`;
-    else if (catalogConfig.channelType === 'channel' || videoId === ':ytsearch:channel')
-        return `https://www.youtube.com/results?search_query=${encodeURIComponent(query.search ?? '')}&sp=${{
-            'Relevance': 'CAASAhAC',
-            'Upload Date': 'CAISAhAC',
-            'View Count': 'CAMSAhAC',
-            'Rating': 'CAESAhAC'
-        }[genre]}`;
-    else if ([termKeyword, sortKeyword].some(keyword => catalogConfig.id?.includes(keyword)))
-        return (catalogConfig.id.startsWith(prefix) ? catalogConfig.id.slice(prefix.length) : catalogConfig.id)
-            .replaceAll(termKeyword, encodeURIComponent(query.search ?? ''))
-            .replaceAll(sortKeyword, catalogConfig.sortOrder?.find(s => s.name === genre)?.id ?? '');
-    else if ([':ytfav', ':ytwatchlater', ':ytsubs', ':ythistory', ':ytrec', ':ytnotif'].includes(videoId))
-        return videoId;
-    else if ((temp = videoId.match(channelRegex)?.groups.id))
-        return `https://www.youtube.com/${temp}/videos`;
-    else if ((temp = videoId.match(channelIDRegex)?.groups.id))
-        return `https://www.youtube.com/channel/${temp}/videos`;
-    else if ((temp = videoId.match(playlistIDRegex)?.groups.id))
-        return 'https://www.youtube.com/playlist?list=' + temp;
-    else if ((temp = videoId.match(videoIDRegex)?.groups.id))
-        return 'https://www.youtube.com/watch?v=' + temp;
-    else if (isURL(videoId))
-        return videoId;
-    return `https://www.youtube.com/results?search_query=${encodeURIComponent(videoId)}&sp=${{
-        'Relevance': 'CAASAhAB',
-        'Upload Date': 'CAISAhAB',
-        'View Count': 'CAMSAhAB',
-        'Rating': 'CAESAhAB'
-    }[genre]}`;
+  /** @type {RegExpMatchArray?} */
+  let temp;
+  const catalogConfig =
+    userConfig.catalogs?.find((cat) => videoId === cat.id) ?? {};
+  if (videoId.startsWith(prefix)) videoId = videoId.slice(prefix.length);
+  /** @type {string} */
+  const genre =
+    (query.genre?.startsWith(reversedPrefix)
+      ? query.genre.slice(reversedPrefix.length)
+      : query.genre
+    )?.trim() ?? "Relevance";
+  if (catalogConfig.channelType === "video" || videoId === ":ytsearch")
+    return `https://www.youtube.com/results?search_query=${encodeURIComponent(query.search ?? "")}&sp=${
+      {
+        Relevance: "CAASAhAB",
+        "Upload Date": "CAISAhAB",
+        "View Count": "CAMSAhAB",
+        Rating: "CAESAhAB",
+      }[genre]
+    }`;
+  else if (
+    catalogConfig.channelType === "channel" ||
+    videoId === ":ytsearch:channel"
+  )
+    return `https://www.youtube.com/results?search_query=${encodeURIComponent(query.search ?? "")}&sp=${
+      {
+        Relevance: "CAASAhAC",
+        "Upload Date": "CAISAhAC",
+        "View Count": "CAMSAhAC",
+        Rating: "CAESAhAC",
+      }[genre]
+    }`;
+  else if (
+    [termKeyword, sortKeyword].some((keyword) =>
+      catalogConfig.id?.includes(keyword),
+    )
+  )
+    return (
+      catalogConfig.id.startsWith(prefix)
+        ? catalogConfig.id.slice(prefix.length)
+        : catalogConfig.id
+    )
+      .replaceAll(termKeyword, encodeURIComponent(query.search ?? ""))
+      .replaceAll(
+        sortKeyword,
+        catalogConfig.sortOrder?.find((s) => s.name === genre)?.id ?? "",
+      );
+  else if (
+    [
+      ":ytfav",
+      ":ytwatchlater",
+      ":ytsubs",
+      ":ythistory",
+      ":ytrec",
+      ":ytnotif",
+    ].includes(videoId)
+  )
+    return videoId;
+  else if ((temp = videoId.match(channelRegex)?.groups.id))
+    return `https://www.youtube.com/${temp}/videos`;
+  else if ((temp = videoId.match(channelIDRegex)?.groups.id))
+    return `https://www.youtube.com/channel/${temp}/videos`;
+  else if ((temp = videoId.match(playlistIDRegex)?.groups.id))
+    return "https://www.youtube.com/playlist?list=" + temp;
+  else if ((temp = videoId.match(videoIDRegex)?.groups.id))
+    return "https://www.youtube.com/watch?v=" + temp;
+  else if (isURL(videoId)) return videoId;
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(videoId)}&sp=${
+    {
+      Relevance: "CAASAhAB",
+      "Upload Date": "CAISAhAB",
+      "View Count": "CAMSAhAB",
+      Rating: "CAESAhAB",
+    }[genre]
+  }`;
 }
 
 /**
  * Parse a request into a manifest URL
- * @param {import('express').Request} req
+ * @param {import('fastify').FastifyRequest} req
  * @returns {string}
  */
 function toManifestURL(req) {
-    return encodeURIComponent(`${req.protocol}://${req.get('host')}/${encodeURIComponent(req.params.config)}/manifest.json`);
+  return encodeURIComponent(
+    `${req.protocol}://${req.headers.host}/${encodeURIComponent(req.params.config)}/manifest.json`,
+  );
 }
 
 /**
@@ -593,7 +733,7 @@ function toManifestURL(req) {
  * @returns {string}
  */
 function toChannelManifestURL(userConfig, video, manifestUrl, protocol, useID) {
-    return `${protocol}/discover/${manifestUrl}/${userConfig.catalogType ?? defaultConfig.catalogType}/${encodeURIComponent(prefix + (useID ? video.channel_id : video.channel_url))}`;
+  return `${protocol}/discover/${manifestUrl}/${userConfig.catalogType ?? defaultConfig.catalogType}/${encodeURIComponent(prefix + (useID ? video.channel_id : video.channel_url))}`;
 }
 
 /**
@@ -608,71 +748,133 @@ function toChannelManifestURL(userConfig, video, manifestUrl, protocol, useID) {
  * @param {string} type
  * @returns {Promise<Object>}
  */
-async function parseMeta(userConfig, video, manifestUrl, protocol, useID, videoID, playlist, type) {
-    const channel = useID && (channelRegex.test(video.id) || channelIDRegex.test(video.id));
-    /** @type {DeArrowResponse?} */
-    let deArrow = null;
-    try {
-        if (useID && videoIDRegex.test(video.id) && userConfig.dearrow)
-            deArrow = await runDeArrow(video.id);
-    } catch (error) {
-        logError(error);
-    }
-    /** @type {string?} */
-    const thumbnail = (deArrow?.thumbnails[0] ?
-        getDeArrowThumbnail(video.id, deArrow.thumbnails[0].timestamp) :
-        null) ?? video.thumbnail ?? video.thumbnails?.at(-1)?.url;
-    return {
-        id: useID ? prefix + video.id : playlist ? prefix + video.url : videoID,
-        type,
-        name: deArrow?.titles[0]?.title ?? video.title ?? 'Unknown Title',
-        poster: thumbnail ? (thumbnail.startsWith('//') ? 'https:' : '') + thumbnail : undefined,  // Handle YouTube Channel List Relative Thumbnails
-        posterShape: channel ? 'square' : 'landscape',
-        releaseInfo: parseInt(video.release_year ?? (video.release_date ?? video.upload_date)?.substring(0, 4) ?? new Date((video.release_timestamp ?? video.timestamp) * 1000).getFullYear()) || undefined,
-        links: [
-            ...(video.channel ? [{
-                name: video.channel,
-                category: 'Directors',
-                url: toChannelManifestURL(userConfig, video, manifestUrl, protocol, useID)
-            }] : []), ...[...(video.categories ?? []), ...(video.tags ?? [])].map(genre => ({
-                name: genre,
-                category: 'Genres',
-                url: `${protocol}/search?search=${encodeURIComponent(genre)}`
-            }))
-        ],
-        description: video.description,
-    };
+async function parseMeta(
+  userConfig,
+  video,
+  manifestUrl,
+  protocol,
+  useID,
+  videoID,
+  playlist,
+  type,
+) {
+  const channel =
+    useID && (channelRegex.test(video.id) || channelIDRegex.test(video.id));
+  /** @type {DeArrowResponse?} */
+  let deArrow = null;
+  try {
+    if (useID && videoIDRegex.test(video.id) && userConfig.dearrow)
+      deArrow = await runDeArrow(video.id);
+  } catch (error) {
+    logError(error);
+  }
+  /** @type {string?} */
+  const thumbnail =
+    (deArrow?.thumbnails[0]
+      ? getDeArrowThumbnail(video.id, deArrow.thumbnails[0].timestamp)
+      : null) ??
+    video.thumbnail ??
+    video.thumbnails?.at(-1)?.url;
+  return {
+    id: useID ? prefix + video.id : playlist ? prefix + video.url : videoID,
+    type,
+    name: deArrow?.titles[0]?.title ?? video.title ?? "Unknown Title",
+    poster: thumbnail
+      ? (thumbnail.startsWith("//") ? "https:" : "") + thumbnail
+      : undefined, // Handle YouTube Channel List Relative Thumbnails
+    posterShape: channel ? "square" : "landscape",
+    releaseInfo:
+      parseInt(
+        video.release_year ??
+          (video.release_date ?? video.upload_date)?.substring(0, 4) ??
+          new Date(
+            (video.release_timestamp ?? video.timestamp) * 1000,
+          ).getFullYear(),
+      ) || undefined,
+    links: [
+      ...(video.channel
+        ? [
+            {
+              name: video.channel,
+              category: "Directors",
+              url: toChannelManifestURL(
+                userConfig,
+                video,
+                manifestUrl,
+                protocol,
+                useID,
+              ),
+            },
+          ]
+        : []),
+      ...[...(video.categories ?? []), ...(video.tags ?? [])].map((genre) => ({
+        name: genre,
+        category: "Genres",
+        url: `${protocol}/search?search=${encodeURIComponent(genre)}`,
+      })),
+    ],
+    description: video.description,
+  };
 }
 
 // Stremio Addon Catalog Route
-app.get('/:config/catalog/:type/:id/:extra?.json', async (req, res, next) => {
-    try {
-        if (!req.params.id?.startsWith(prefix)) throw new Error(`Unknown ID in Catalog handler: "${req.params.id}"`);
-        const userConfig = decryptConfig(req.params.config, false);
-        const query = Object.fromEntries(new URLSearchParams(req.params.extra ?? ''));
-        const skip = parseInt(query.skip ?? 0);
-        const url = toYouTubeURL(userConfig, req.params.id, query);
-        const videos = await runYtDlpWithAuth(url, req.params.config, [
-            '-I', query.genre?.startsWith(reversedPrefix) ? `${-(skip + 1)}:${-(skip + 100)}:-1` : `${skip + 1}:${skip + 100}:1`,
-            '--yes-playlist'
-        ]);
-        const useID = videos.webpage_url_domain === 'youtube.com';
-        const playlist = videos._type === 'playlist';
-        const ref = req.get('Referrer');
-        const protocol = ref ? ref + '#' : 'stremio://';
-        const canCache = [channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex].map(r => r.test(url)).some(Boolean);
-        return res.json({
-            metas: (await Promise.all(
-                (playlist ? videos.entries : [videos])
-                    .map(video => parseMeta(userConfig, video, toManifestURL(req), protocol, useID, req.params.id, playlist, req.params.type))
-            )).filter(meta => meta !== null),
-            behaviorHints: { cacheMaxAge: canCache ? process.env.TTL ?? 3600 : 0 }
-        });
-    } catch (error) {
-        res.json({ metas: [] });
-        return next(error);
-    }
-});
+async function handleCatalog(req, reply) {
+  try {
+    if (!req.params.id?.startsWith(prefix))
+      throw new Error(`Unknown ID in Catalog handler: "${req.params.id}"`);
+    const userConfig = decryptConfig(req.params.config, false);
+    const query = Object.fromEntries(
+      new URLSearchParams(req.params.extra ?? ""),
+    );
+    const skip = parseInt(query.skip ?? 0);
+    const url = toYouTubeURL(userConfig, req.params.id, query);
+    const videos = await runYtDlpWithAuth(url, req.params.config, [
+      "-I",
+      query.genre?.startsWith(reversedPrefix)
+        ? `${-(skip + 1)}:${-(skip + 100)}:-1`
+        : `${skip + 1}:${skip + 100}:1`,
+      "--yes-playlist",
+    ]);
+    const useID = videos.webpage_url_domain === "youtube.com";
+    const playlist = videos._type === "playlist";
+    const ref = req.headers.referrer;
+    const protocol = ref ? ref + "#" : "stremio://";
+    const canCache = [
+      channelRegex,
+      channelIDRegex,
+      playlistIDRegex,
+      videoIDRegex,
+    ]
+      .map((r) => r.test(url))
+      .some(Boolean);
+    return reply.send({
+      metas: (
+        await Promise.all(
+          (playlist ? videos.entries : [videos]).map((video) =>
+            parseMeta(
+              userConfig,
+              video,
+              toManifestURL(req),
+              protocol,
+              useID,
+              req.params.id,
+              playlist,
+              req.params.type,
+            ),
+          ),
+        )
+      ).filter((meta) => meta !== null),
+      behaviorHints: { cacheMaxAge: canCache ? (process.env.TTL ?? 3600) : 0 },
+    });
+  } catch (error) {
+    logError(error);
+    return reply.send({ metas: [] });
+  }
+}
+
+// Fastify does not support an optional parameter before the .json suffix.
+app.get("/:config/catalog/:type/:id.json", handleCatalog);
+app.get("/:config/catalog/:type/:id/:extra.json", handleCatalog);
 
 /**
  * Parse a YT-DLP video object into Stremio streams
@@ -684,226 +886,329 @@ app.get('/:config/catalog/:type/:id/:extra?.json', async (req, res, next) => {
  * @param {string} reqHost
  * @returns {Promise<Array<Object>>}
  */
-async function parseStream(userConfig, video, manifestUrl, protocol, reqProtocol, reqHost) {
-    let ranges = [];
-    try {
-        if (videoIDRegex.test(video.id))
-            ranges = (await getSponsorBlockSegments(video.id, userConfig)).filter(s => userConfig.sponsorblock?.includes(s.category)).map(s => s.segment);
-    } catch (error) {
-        logError(error);
-    }
-    const rangesURI = ranges.length ? encodeURIComponent(JSON.stringify(ranges)) : null;
-    const useID = video.webpage_url_domain === 'youtube.com';
-    return [
-        ...(video.formats ?? [video]).filter(src => ((userConfig.showBrokenLinks ?? defaultConfig.showBrokenLinks) || (!src.format_id?.startsWith('sb') && src.acodec !== 'none' && src.vcodec !== 'none')) && src.url).toReversed().flatMap(src => {
-            const base = {
-                description: src.format,
-                behaviorHints: {
-                    videoSize: src.filesize_approx,
-                    filename: video.filename
-                }
-            };
-            return [
-                ...(src.protocol === 'm3u8_native' && rangesURI ? [{
-                    ...base,
-                    name: `SB Player ${src.resolution}`,
-                    url: `${reqProtocol}://${reqHost}/stream/${encodeURIComponent(src.url)}?ranges=${rangesURI}${userConfig.fallback ?? defaultConfig.fallback ? '&fallback=1' : ''
-                        }${userConfig.overestimate ?? defaultConfig.overestimate ? '&overestimate=1' : ''
-                        }`,
-                    behaviorHints: {
-                        ...base.behaviorHints,
-                        bingeGroup: `SB Player ${src.resolution}`,
-                        notWebReady: true
-                    }
-                }] : []), {
-                    ...base,
-                    name: `YT-DLP Player ${src.resolution}`,
-                    url: src.url,
-                    behaviorHints: {
-                        ...base.behaviorHints,
-                        bingeGroup: `YT-DLP Player ${src.resolution}`,
-                        ...(src.protocol !== 'https' || src.video_ext !== 'mp4' ? { notWebReady: true } : {})
-                    }
-                }
-            ];
-        }), ...(useID && (((video.is_live ?? false) && channelIDRegex.test(video.id)) || videoIDRegex.test(video.id)) ? [
-            {
-                name: 'Stremio Player',
-                ytId: video.id,
-                description: 'Click to watch using Stremio\'s built-in YouTube Player',
-                behaviorHints: {
-                    bingeGroup: 'Stremio Player',
-                    filename: video.filename
-                }
-            }, {
-                name: 'External Player',
-                externalUrl: video.webpage_url,
-                description: 'Click to watch in the External Player'
-            }
-        ] : []), ...(video.channel_url ? [
-            {
-                name: 'YT-DLP Channel',
-                externalUrl: `${protocol}/discover/${manifestUrl}/${userConfig.catalogType ?? defaultConfig.catalogType}/${encodeURIComponent(prefix + (useID ? video.channel_id : video.channel_url))}`,
-                description: 'Click to open the channel as a Catalog'
-            }, {
-                name: 'External Channel',
-                externalUrl: video.channel_url,
-                description: 'Click to open the channel in the External Player'
-            }
-        ] : [])
-    ];
+async function parseStream(
+  userConfig,
+  video,
+  manifestUrl,
+  protocol,
+  reqProtocol,
+  reqHost,
+) {
+  let ranges = [];
+  try {
+    if (videoIDRegex.test(video.id))
+      ranges = (await getSponsorBlockSegments(video.id, userConfig))
+        .filter((s) => userConfig.sponsorblock?.includes(s.category))
+        .map((s) => s.segment);
+  } catch (error) {
+    logError(error);
+  }
+  const rangesURI = ranges.length
+    ? encodeURIComponent(JSON.stringify(ranges))
+    : null;
+  const useID = video.webpage_url_domain === "youtube.com";
+  return [
+    ...(video.formats ?? [video])
+      .filter(
+        (src) =>
+          ((userConfig.showBrokenLinks ?? defaultConfig.showBrokenLinks) ||
+            (!src.format_id?.startsWith("sb") &&
+              src.acodec !== "none" &&
+              src.vcodec !== "none")) &&
+          src.url,
+      )
+      .toReversed()
+      .flatMap((src) => {
+        const base = {
+          description: src.format,
+          behaviorHints: {
+            videoSize: src.filesize_approx,
+            filename: video.filename,
+          },
+        };
+        return [
+          ...(src.protocol === "m3u8_native" && rangesURI
+            ? [
+                {
+                  ...base,
+                  name: `SB Player ${src.resolution}`,
+                  url: `${reqProtocol}://${reqHost}/stream/${encodeURIComponent(src.url)}?ranges=${rangesURI}${
+                    (userConfig.fallback ?? defaultConfig.fallback)
+                      ? "&fallback=1"
+                      : ""
+                  }${
+                    (userConfig.overestimate ?? defaultConfig.overestimate)
+                      ? "&overestimate=1"
+                      : ""
+                  }`,
+                  behaviorHints: {
+                    ...base.behaviorHints,
+                    bingeGroup: `SB Player ${src.resolution}`,
+                    notWebReady: true,
+                  },
+                },
+              ]
+            : []),
+          {
+            ...base,
+            name: `YT-DLP Player ${src.resolution}`,
+            url: src.url,
+            behaviorHints: {
+              ...base.behaviorHints,
+              bingeGroup: `YT-DLP Player ${src.resolution}`,
+              ...(src.protocol !== "https" || src.video_ext !== "mp4"
+                ? { notWebReady: true }
+                : {}),
+            },
+          },
+        ];
+      }),
+    ...(useID &&
+    (((video.is_live ?? false) && channelIDRegex.test(video.id)) ||
+      videoIDRegex.test(video.id))
+      ? [
+          {
+            name: "Stremio Player",
+            ytId: video.id,
+            description:
+              "Click to watch using Stremio's built-in YouTube Player",
+            behaviorHints: {
+              bingeGroup: "Stremio Player",
+              filename: video.filename,
+            },
+          },
+          {
+            name: "External Player",
+            externalUrl: video.webpage_url,
+            description: "Click to watch in the External Player",
+          },
+        ]
+      : []),
+    ...(video.channel_url
+      ? [
+          {
+            name: "YT-DLP Channel",
+            externalUrl: `${protocol}/discover/${manifestUrl}/${userConfig.catalogType ?? defaultConfig.catalogType}/${encodeURIComponent(prefix + (useID ? video.channel_id : video.channel_url))}`,
+            description: "Click to open the channel as a Catalog",
+          },
+          {
+            name: "External Channel",
+            externalUrl: video.channel_url,
+            description: "Click to open the channel in the External Player",
+          },
+        ]
+      : []),
+  ];
 }
 
 // Stremio Addon Meta Route
-app.get('/:config/meta/:type/:id.json', async (req, res, next) => {
-    try {
-        if (!req.params.id?.startsWith(prefix)) throw new Error(`Unknown ID in Meta handler: "${req.params.id}"`);
-        const userConfig = decryptConfig(req.params.config, false);
-        const video = await runYtDlpWithAuth(toYouTubeURL(userConfig, req.params.id, {}), req.params.config, [
-            '-I', ':100',
-            '--no-playlist'
-        ]);
-        const useID = video.webpage_url_domain === 'youtube.com';
-        const channel = useID && (channelRegex.test(video.id) || channelIDRegex.test(video.id));
-        const playlist = video._type === 'playlist';
-        const parseDate = video => {
-            let r = 0;
-            if (d = video.release_date ?? video.upload_date)
-                r = `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}T00:00:00Z`;
-            if (t = video.release_timestamp ?? video.timestamp)
-                r = t * 1000;
-            return new Date(r).toISOString();
-        };
-        const released = parseDate(video);
-        const manifestUrl = toManifestURL(req);
-        const ref = req.get('Referrer');
-        const protocol = ref ? ref + '#' : 'stremio://';
-        const live = channel ?
-            await runYtDlpWithAuth(`https://www.youtube.com/channel/${video.id}/live`, req.params.config, [
-                '-I', ':1',
-                '--no-playlist'
-            ]) : null;
-        const meta = await parseMeta(userConfig, video, manifestUrl, protocol, useID, req.params.id, playlist, req.params.type);
-        const videos = [video, ...(live?.is_live ? [live] : [])];
-        return res.json({
-            meta: {
-                ...meta,
-                background: meta.poster,
-                released,
-                videos: [
-                    ...await Promise.all(videos.map(async (video2, episode) => ({
-                        id: `${req.params.id}:1:${episode + 1}`,
-                        title: playlist && episode === 0 ? 'Channel Options' : video2.title,
-                        released,
-                        thumbnail: meta.poster,
-                        streams: await parseStream(userConfig, video2, manifestUrl, protocol, req.protocol, req.get('host')),
-                        available: true,
-                        episode: episode + 1,
-                        season: 1,
-                        overview: playlist && episode === 0 ? 'Open the channel as a catalog' : video2.description
-                    }))), ...await Promise.all((video.entries?.map(async (video2, episode) => {
-                        let deArrow = null;
-                        try {
-                            if (useID && videoIDRegex.test(video2.id) && userConfig.dearrow)
-                                deArrow = await runDeArrow(video2.id);
-                        } catch (error) {
-                            logError(error);
-                        }
-                        return {
-                            id: prefix + video2.id,
-                            title: deArrow?.titles[0]?.title ?? video2.title ?? 'Unknown Title',
-                            released: parseDate(video2),
-                            thumbnail: (deArrow?.thumbnails[0] ?
-                                getDeArrowThumbnail(video2.id, deArrow.thumbnails[0].timestamp) :
-                                null) ?? video2.thumbnail ?? video2.thumbnails?.at(-1)?.url,
-                            available: true,
-                            episode: episode + videos.length + 1,
-                            season: 1,
-                            overview: video2.description
-                        };
-                    }) ?? []))
-                ],
-                runtime: `${Math.floor((video.duration ?? 0) / 60)} min`,
-                language: video.language,
-                website: video.webpage_url,
-                ...(video._type === 'playlist' ? {} : { behaviorHints: { defaultVideoId: req.params.id + ':1:1' } })
-            }
-        });
-    } catch (error) {
-        res.json({ meta: {} });
-        return next(error);
-    }
+app.get("/:config/meta/:type/:id.json", async (req, reply) => {
+  try {
+    if (!req.params.id?.startsWith(prefix))
+      throw new Error(`Unknown ID in Meta handler: "${req.params.id}"`);
+    const userConfig = decryptConfig(req.params.config, false);
+    const video = await runYtDlpWithAuth(
+      toYouTubeURL(userConfig, req.params.id, {}),
+      req.params.config,
+      ["-I", ":100", "--no-playlist"],
+    );
+    const useID = video.webpage_url_domain === "youtube.com";
+    const channel =
+      useID && (channelRegex.test(video.id) || channelIDRegex.test(video.id));
+    const playlist = video._type === "playlist";
+    const parseDate = (video) => {
+      let r = 0;
+      if ((d = video.release_date ?? video.upload_date))
+        r = `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}T00:00:00Z`;
+      if ((t = video.release_timestamp ?? video.timestamp)) r = t * 1000;
+      return new Date(r).toISOString();
+    };
+    const released = parseDate(video);
+    const manifestUrl = toManifestURL(req);
+    const ref = req.headers.referrer;
+    const protocol = ref ? ref + "#" : "stremio://";
+    const live = channel
+      ? await runYtDlpWithAuth(
+          `https://www.youtube.com/channel/${video.id}/live`,
+          req.params.config,
+          ["-I", ":1", "--no-playlist"],
+        )
+      : null;
+    const meta = await parseMeta(
+      userConfig,
+      video,
+      manifestUrl,
+      protocol,
+      useID,
+      req.params.id,
+      playlist,
+      req.params.type,
+    );
+    const videos = [video, ...(live?.is_live ? [live] : [])];
+    return reply.send({
+      meta: {
+        ...meta,
+        background: meta.poster,
+        released,
+        videos: [
+          ...(await Promise.all(
+            videos.map(async (video2, episode) => ({
+              id: `${req.params.id}:1:${episode + 1}`,
+              title:
+                playlist && episode === 0 ? "Channel Options" : video2.title,
+              released,
+              thumbnail: meta.poster,
+              streams: await parseStream(
+                userConfig,
+                video2,
+                manifestUrl,
+                protocol,
+                req.protocol,
+                req.headers.host,
+              ),
+              available: true,
+              episode: episode + 1,
+              season: 1,
+              overview:
+                playlist && episode === 0
+                  ? "Open the channel as a catalog"
+                  : video2.description,
+            })),
+          )),
+          ...(await Promise.all(
+            video.entries?.map(async (video2, episode) => {
+              let deArrow = null;
+              try {
+                if (useID && videoIDRegex.test(video2.id) && userConfig.dearrow)
+                  deArrow = await runDeArrow(video2.id);
+              } catch (error) {
+                logError(error);
+              }
+              return {
+                id: prefix + video2.id,
+                title:
+                  deArrow?.titles[0]?.title ?? video2.title ?? "Unknown Title",
+                released: parseDate(video2),
+                thumbnail:
+                  (deArrow?.thumbnails[0]
+                    ? getDeArrowThumbnail(
+                        video2.id,
+                        deArrow.thumbnails[0].timestamp,
+                      )
+                    : null) ??
+                  video2.thumbnail ??
+                  video2.thumbnails?.at(-1)?.url,
+                available: true,
+                episode: episode + videos.length + 1,
+                season: 1,
+                overview: video2.description,
+              };
+            }) ?? [],
+          )),
+        ],
+        runtime: `${Math.floor((video.duration ?? 0) / 60)} min`,
+        language: video.language,
+        website: video.webpage_url,
+        ...(video._type === "playlist"
+          ? {}
+          : { behaviorHints: { defaultVideoId: req.params.id + ":1:1" } }),
+      },
+    });
+  } catch (error) {
+    logError(error);
+    return reply.send({ meta: {} });
+  }
 });
 
 // Stremio Addon Stream Route
-app.get('/:config/stream/:type/:id.json', async (req, res, next) => {
-    try {
-        if (!req.params.id?.startsWith(prefix)) throw new Error(`Unknown ID in Stream handler: "${req.params.id}"`);
-        const userConfig = decryptConfig(req.params.config, false);
-        const video = await runYtDlpWithAuth(toYouTubeURL(userConfig, req.params.id, {}), req.params.config, [
-            '-I', ':1',
-            '--no-playlist'
-        ]);
-        const ref = req.get('Referrer');
-        const protocol = ref ? ref + '#' : 'stremio://';
-        return res.json({
-            streams: await parseStream(userConfig, video, toManifestURL(req), protocol, req.protocol, req.get('host'))
-        });
-    } catch (error) {
-        res.json({ streams: [] });
-        return next(error)
-    }
+app.get("/:config/stream/:type/:id.json", async (req, reply) => {
+  try {
+    if (!req.params.id?.startsWith(prefix))
+      throw new Error(`Unknown ID in Stream handler: "${req.params.id}"`);
+    const userConfig = decryptConfig(req.params.config, false);
+    const video = await runYtDlpWithAuth(
+      toYouTubeURL(userConfig, req.params.id, {}),
+      req.params.config,
+      ["-I", ":1", "--no-playlist"],
+    );
+    const ref = req.headers.referrer;
+    const protocol = ref ? ref + "#" : "stremio://";
+    return reply.send({
+      streams: await parseStream(
+        userConfig,
+        video,
+        toManifestURL(req),
+        protocol,
+        req.protocol,
+        req.headers.host,
+      ),
+    });
+  } catch (error) {
+    logError(error);
+    return reply.send({ streams: [] });
+  }
 });
 
 // Stremio Addon Subtitles Route
-app.get('/:config/subtitles/:type/:id.json', async (req, res, next) => {
-    try {
-        if (!req.params.id?.startsWith(prefix)) throw new Error(`Unknown ID in Subtitles handler: "${req.params.id}"`);
-        const userConfig = decryptConfig(req.params.config, false);
-        const video = await runYtDlpWithAuth(toYouTubeURL(userConfig, req.params.id, {}), req.params.config, [
-            '-I', ':1',
-            '--no-playlist'
-        ]);
-        return res.json({
-            subtitles: [
-                ...Object.entries(video.subtitles ?? {}).map(([k, v]) => {
-                    const srt = v.find(x => x.ext == 'srt') ?? v[0];
-                    return srt ? {
-                        id: srt.name,
-                        url: srt.url,
-                        lang: k
-                    } : null;
-                }), ...Object.entries(video.automatic_captions ?? {}).map(([k, v]) => {
-                    const srt = v.find(x => x.ext == 'srt') ?? v[0];
-                    return srt ? {
-                        id: `Auto ${srt.name}`,
-                        url: srt.url,
-                        lang: k
-                    } : null;
-                })
-            ].filter(srt => srt !== null)
-        });
-    } catch (error) {
-        res.json({ subtitles: [] });
-        return next(error)
-    }
+app.get("/:config/subtitles/:type/:id.json", async (req, reply) => {
+  try {
+    if (!req.params.id?.startsWith(prefix))
+      throw new Error(`Unknown ID in Subtitles handler: "${req.params.id}"`);
+    const userConfig = decryptConfig(req.params.config, false);
+    const video = await runYtDlpWithAuth(
+      toYouTubeURL(userConfig, req.params.id, {}),
+      req.params.config,
+      ["-I", ":1", "--no-playlist"],
+    );
+    return reply.send({
+      subtitles: [
+        ...Object.entries(video.subtitles ?? {}).map(([k, v]) => {
+          const srt = v.find((x) => x.ext == "srt") ?? v[0];
+          return srt
+            ? {
+                id: srt.name,
+                url: srt.url,
+                lang: k,
+              }
+            : null;
+        }),
+        ...Object.entries(video.automatic_captions ?? {}).map(([k, v]) => {
+          const srt = v.find((x) => x.ext == "srt") ?? v[0];
+          return srt
+            ? {
+                id: `Auto ${srt.name}`,
+                url: srt.url,
+                lang: k,
+              }
+            : null;
+        }),
+      ].filter((srt) => srt !== null),
+    });
+  } catch (error) {
+    logError(error);
+    return reply.send({ subtitles: [] });
+  }
 });
 
 // Configuration Page
-app.get(['/', '/:config?/configure'], async (req, res) => {
-    /** @type {Object} */
-    let userConfig = {};
-    try {
-        userConfig = req.params.config ? decryptConfig(req.params.config, false) : {};
-    } catch (error) {
-        logError(error)
-    }
-    const catalogType = JSON.stringify(userConfig.catalogType ?? defaultConfig.catalogType);
-    res.send(`
+async function configurationPage(req, reply) {
+  /** @type {Object} */
+  let userConfig = {};
+  try {
+    userConfig = req.params.config
+      ? decryptConfig(req.params.config, false)
+      : {};
+  } catch (error) {
+    logError(error);
+  }
+  const catalogType = JSON.stringify(
+    userConfig.catalogType ?? defaultConfig.catalogType,
+  );
+  return reply.type("text/html").send(`
         <!DOCTYPE html>
         <html>
         <head>
-            <link rel="icon" href="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? 'main' : `v${VERSION}`}/icon.png?raw=true">
+            <link rel="icon" href="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true">
             <title>YouTubio | ElfHosted</title>
             <link href="https://fonts.googleapis.com/css2?family=Ubuntu&display=swap" rel="stylesheet">
             <style>
@@ -942,7 +1247,7 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
         <body>
             <div class="container">
                 <div style="display: flex; justify-content: center; margin: 1rem; align-items: center;">
-                    <img src="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? 'main' : `v${VERSION}`}/icon.png?raw=true" alt="YouTubio">
+                    <img src="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true" alt="YouTubio">
                     <h1 style="position: relative; top: 96px; left: -80px; font-size: 32px;">ElfHosted</h1>
                 </div>
                 <h3 style="color: #f5a623;">v${VERSION}</h3>
@@ -964,10 +1269,10 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
                     <div class="settings-section">
                         <h3>Cookies</h3>
                         <hr>
-                        <textarea id="cookie-data" placeholder="Paste the content of your cookies.txt file here..."${userConfig.encrypted ? ` disabled>${userConfig.encrypted ?? ''}` : '>'}</textarea>
+                        <textarea id="cookie-data" placeholder="Paste the content of your cookies.txt file here..."${userConfig.encrypted ? ` disabled>${userConfig.encrypted ?? ""}` : ">"}</textarea>
                         <h3>Gemini API Key</h3>
                         <hr>
-                        <input type="text" id="gemini" name="gemini" placeholder="Enter your Gemini API key here..."${userConfig.encrypted ? ' disabled' : ''}>
+                        <input type="text" id="gemini" name="gemini" placeholder="Enter your Gemini API key here..."${userConfig.encrypted ? " disabled" : ""}>
                         <button type="button" class="install-button" id="clear-cookies">Clear</button>
                     </div>
                     <div class="settings-section">
@@ -1028,53 +1333,53 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
                                 </tr>
                             </thead>
                             <tbody>
-                                ${process.env.NO_DEARROW ? '<!--' : ''}
+                                ${process.env.NO_DEARROW ? "<!--" : ""}
                                 <tr>
-                                    <td><input type="checkbox" id="dearrow" name="dearrow" data-default=0 ${userConfig.dearrow ? 'checked' : ''}></td>
+                                    <td><input type="checkbox" id="dearrow" name="dearrow" data-default=0 ${userConfig.dearrow ? "checked" : ""}></td>
                                     <td><label for="dearrow">DeArrow</label></td>
                                     <td class="setting-description">Use DeArrow to fetch video thumbnails and Titles.</td>
                                 </tr>
-                                ${process.env.NO_DEARROW ? '-->' : ''}
-                                ${process.env.NO_SPONSORBLOCK ? '<!--' : ''}
+                                ${process.env.NO_DEARROW ? "-->" : ""}
+                                ${process.env.NO_SPONSORBLOCK ? "<!--" : ""}
                                 <tr>
                                     <td>
                                         <select name="sponsorblock" id="sponsorblock" multiple>
-                                            <option value="sponsor" ${userConfig.sponsorblock?.includes('sponsor') ? 'selected' : ''}>Sponsor</option>
-                                            <option value="selfpromo" ${userConfig.sponsorblock?.includes('selfpromo') ? 'selected' : ''}>Self Promo</option>
-                                            <option value="interaction" ${userConfig.sponsorblock?.includes('interaction') ? 'selected' : ''}>Interaction</option>
-                                            <option value="intro" ${userConfig.sponsorblock?.includes('intro') ? 'selected' : ''}>Intro</option>
-                                            <option value="outro" ${userConfig.sponsorblock?.includes('outro') ? 'selected' : ''}>Outro</option>
-                                            <option value="preview" ${userConfig.sponsorblock?.includes('preview') ? 'selected' : ''}>Preview</option>
-                                            <option value="hook" ${userConfig.sponsorblock?.includes('hook') ? 'selected' : ''}>Hook</option>
-                                            <option value="filler" ${userConfig.sponsorblock?.includes('filler') ? 'selected' : ''}>Filler</option>
+                                            <option value="sponsor" ${userConfig.sponsorblock?.includes("sponsor") ? "selected" : ""}>Sponsor</option>
+                                            <option value="selfpromo" ${userConfig.sponsorblock?.includes("selfpromo") ? "selected" : ""}>Self Promo</option>
+                                            <option value="interaction" ${userConfig.sponsorblock?.includes("interaction") ? "selected" : ""}>Interaction</option>
+                                            <option value="intro" ${userConfig.sponsorblock?.includes("intro") ? "selected" : ""}>Intro</option>
+                                            <option value="outro" ${userConfig.sponsorblock?.includes("outro") ? "selected" : ""}>Outro</option>
+                                            <option value="preview" ${userConfig.sponsorblock?.includes("preview") ? "selected" : ""}>Preview</option>
+                                            <option value="hook" ${userConfig.sponsorblock?.includes("hook") ? "selected" : ""}>Hook</option>
+                                            <option value="filler" ${userConfig.sponsorblock?.includes("filler") ? "selected" : ""}>Filler</option>
                                         </select>
                                     </td>
                                     <td><label for="sponsorblock">SponsorBlock</label></td>
                                     <td class="setting-description">Use SponsorBlock to skip various video segments. (Hold Ctrl/Cmd to select multiple segment types.)</td>
                                 </tr>
                                 <tr>
-                                    <td><input type="checkbox" id="fallback" name="fallback" data-default=1 ${userConfig.fallback ?? defaultConfig.fallback ? 'checked' : ''}></td>
+                                    <td><input type="checkbox" id="fallback" name="fallback" data-default=1 ${(userConfig.fallback ?? defaultConfig.fallback) ? "checked" : ""}></td>
                                     <td><label for="fallback">SponsorBlock Fallback</label></td>
                                     <td class="setting-description">Fallback to the untrimmed video if trimming results in an error.</td>
                                 </tr>
                                 <tr>
-                                    <td><input type="checkbox" id="overestimate" name="overestimate" data-default=0 ${userConfig.overestimate ?? defaultConfig.overestimate ? 'checked' : ''}></td>
+                                    <td><input type="checkbox" id="overestimate" name="overestimate" data-default=0 ${(userConfig.overestimate ?? defaultConfig.overestimate) ? "checked" : ""}></td>
                                     <td><label for="overestimate">Overestimate SponsorBlock Segments</label></td>
                                     <td class="setting-description">Overestimate trimming of SponsorBlock segments.</td>
                                 </tr>
-                                ${process.env.NO_SPONSORBLOCK ? '-->' : ''}
+                                ${process.env.NO_SPONSORBLOCK ? "-->" : ""}
                                 <tr>
-                                    <td><input type="checkbox" id="markWatchedOnLoad" name="markWatchedOnLoad" data-default=0 ${userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad ? 'checked' : ''}></td>
+                                    <td><input type="checkbox" id="markWatchedOnLoad" name="markWatchedOnLoad" data-default=0 ${(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) ? "checked" : ""}></td>
                                     <td><label for="markWatchedOnLoad">Mark Watched</label></td>
                                     <td class="setting-description">Mark videos as watched in your YouTube history when you open them in Stremio. This helps keep your YouTube watch history synchronized. (This disables caching.)</td>
                                 </tr>
                                 <tr>
-                                    <td><input type="checkbox" id="showBrokenLinks" name="showBrokenLinks" data-default=0 ${userConfig.showBrokenLinks ?? defaultConfig.showBrokenLinks ? 'checked' : ''}></td>
+                                    <td><input type="checkbox" id="showBrokenLinks" name="showBrokenLinks" data-default=0 ${(userConfig.showBrokenLinks ?? defaultConfig.showBrokenLinks) ? "checked" : ""}></td>
                                     <td><label for="showBrokenLinks">Show Unsupported Streams</label></td>
                                     <td class="setting-description">Return all streams found by YT-DLP, not just ones supported by Stremio.</td>
                                 </tr>
                                 <tr>
-                                    <td><input type="checkbox" id="search" name="search" data-default=1 ${userConfig.search ?? defaultConfig.search ? 'checked' : ''}></td>
+                                    <td><input type="checkbox" id="search" name="search" data-default=1 ${(userConfig.search ?? defaultConfig.search) ? "checked" : ""}></td>
                                     <td><label for="search">Add YouTube Search</label></td>
                                     <td class="setting-description">Add a default YouTube search catalog for videos and channels.</td>
                                 </tr>
@@ -1128,10 +1433,14 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
                     { type: ${catalogType}, id: ':ytwatchlater', name: 'Watch Later', channelType: 'auto' },
                     { type: ${catalogType}, id: ':ythistory', name: 'History', channelType: 'auto' }
                 ];
-                let playlists = ${JSON.stringify(userConfig.catalogs?.map(pl => ({
-        ...pl,
-        id: pl.id.startsWith(prefix) ? pl.id.slice(prefix.length) : pl.id
-    })) ?? [])};
+                let playlists = ${JSON.stringify(
+                  userConfig.catalogs?.map((pl) => ({
+                    ...pl,
+                    id: pl.id.startsWith(prefix)
+                      ? pl.id.slice(prefix.length)
+                      : pl.id,
+                  })) ?? [],
+                )};
                 document.getElementById('clear-cookies').addEventListener('click', () => {
                     cookies.value = "";
                     cookies.disabled = false;
@@ -1394,7 +1703,7 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
                             id: ${JSON.stringify(prefix)} + pl.id,
                             ...(pl.sortOrder?.length ? { sortOrder: pl.sortOrder } : {})
                         }));
-                        const configString = \`://${req.get('host')}/\${encodeURIComponent(JSON.stringify({
+                        const configPath = \`/\${encodeURIComponent(JSON.stringify({
                             ...(cookies.value ? {encrypted: cookies.value} : {}),
                             ...(modifiedPlaylists.length ? { catalogs: modifiedPlaylists } : {}),
                             // Non-Sensitive Settings
@@ -1410,11 +1719,10 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
                                     }).filter(x => x !== null)
                             )
                         }))}/\`;
-                        const protocol = ${JSON.stringify(req.protocol)};
-                        const manifestString = configString + 'manifest.json';
-                        installStremio.href = 'stremio' + manifestString;
-                        reload.href = \`\${protocol}\${configString}configure\`;
-                        installUrlInput.value = protocol + manifestString;
+                        const manifestPath = configPath + 'manifest.json';
+                        installStremio.href = \`stremio://\${window.location.host}\${manifestPath}\`;
+                        reload.href = window.location.origin + configPath + 'configure';
+                        installUrlInput.value = window.location.origin + manifestPath;
                         installWeb.href = \`https://web.stremio.com/#/addons?addon=\${encodeURIComponent(installUrlInput.value)}\`;
                         resultsDiv.style.display = 'block';
                     } catch (error) {
@@ -1435,21 +1743,45 @@ app.get(['/', '/:config?/configure'], async (req, res) => {
         </body>
         </html>
     `);
-});
+}
+
+app.get("/", configurationPage);
+app.get("/:config/configure", configurationPage);
 
 // Error Handling Middleware
-app.use((err, req, res, next) => {
-    logError(err)
-    if (!res.headersSent)
-        res.status(500).json({ error: 'Internal server error', message: err.message });
+app.setErrorHandler((error, req, reply) => {
+  logError(error);
+  if (!reply.sent)
+    reply
+      .code(500)
+      .send({ error: "Internal server error", message: error.message });
+});
+
+closeWithGrace(async ({ err }) => {
+  if (err) console.error(err);
+  await app.close();
 });
 
 // Start the Server
-app.listen(PORT, () => {
+app
+  .listen({ port: Number(PORT), host: "0.0.0.0" })
+  .then(() => {
     console.log(`Addon server v${VERSION} running on port ${PORT}`);
     if (!process.env.ENCRYPTION_KEY) {
-        console.warn('WARNING: Using random encryption key. Set ENCRYPTION_KEY environment variable for production.');
-        if (process.env.DEV_LOGGING) console.warn('Generated key (base64):', ENCRYPTION_KEY.toString('base64'));
+      console.warn(
+        "WARNING: Using random encryption key. Set ENCRYPTION_KEY environment variable for production.",
+      );
+      if (process.env.DEV_LOGGING)
+        console.warn(
+          "Generated key (base64):",
+          ENCRYPTION_KEY.toString("base64"),
+        );
     }
-    console.log(`Access the configuration page at: ${process.env.SPACE_HOST ? 'https://' + process.env.SPACE_HOST : 'http://localhost:' + PORT}`);
-});
+    console.log(
+      `Access the configuration page at: ${process.env.SPACE_HOST ? "https://" + process.env.SPACE_HOST : "http://localhost:" + PORT}`,
+    );
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
