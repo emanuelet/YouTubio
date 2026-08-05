@@ -12,6 +12,7 @@ const YTDlpWrap = require("yt-dlp-wrap-plus").default;
 const fs = require("fs").promises;
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const cache = new (require("node-cache"))({
   stdTTL: process.env.TTL ?? 3600,
   useClones: false,
@@ -58,7 +59,7 @@ const supportedWebsites = new Promise(async (resolve) =>
   ),
 );
 
-/** Encrypts text using AES-256-GCM
+/** Encrypts text using compressed AES-256-GCM
  * @param {string} text
  * @returns {string}
  */
@@ -73,18 +74,12 @@ function encrypt(text) {
       .digest(),
     iv,
   );
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
+  const encrypted = Buffer.concat([
+    cipher.update(zlib.deflateRawSync(text)),
+    cipher.final(),
+  ]);
   const authTag = cipher.getAuthTag();
-  return (
-    salt.toString("hex") +
-    ":" +
-    iv.toString("hex") +
-    ":" +
-    authTag.toString("hex") +
-    ":" +
-    encrypted
-  );
+  return `v2:${Buffer.concat([salt, iv, authTag, encrypted]).toString("base64url")}`;
 }
 
 /**
@@ -93,6 +88,28 @@ function encrypt(text) {
  * @returns {string}
  */
 function decrypt(encryptedData) {
+  if (encryptedData.startsWith("v2:")) {
+    const payload = Buffer.from(encryptedData.slice(3), "base64url");
+    if (payload.length <= 44) throw new Error("Invalid encrypted data format");
+    const salt = payload.subarray(0, 16);
+    const iv = payload.subarray(16, 28);
+    const authTag = payload.subarray(28, 44);
+    const encrypted = payload.subarray(44);
+    const decipher = crypto.createDecipheriv(
+      ALGORITHM,
+      crypto
+        .createHash("sha256")
+        .update(Buffer.concat([ENCRYPTION_KEY, salt]))
+        .digest(),
+      iv,
+    );
+    decipher.setAuthTag(authTag);
+    return zlib
+      .inflateRawSync(Buffer.concat([decipher.update(encrypted), decipher.final()]), {
+        maxOutputLength: 4 * 1024 * 1024,
+      })
+      .toString("utf8");
+  }
   const parts = encryptedData.split(":");
   if (parts.length !== 4) throw new Error("Invalid encrypted data format");
   const salt = Buffer.from(parts[0], "hex");
@@ -473,10 +490,13 @@ function logError(error) {
  */
 function decryptConfig(encryptedConfig, enableDecryption = true) {
   /** @type {Object} */
-  const config =
-    typeof encryptedConfig === "string"
-      ? JSON.parse(encryptedConfig)
-      : encryptedConfig;
+  const config = typeof encryptedConfig === "string"
+    ? JSON.parse(
+        encryptedConfig.startsWith("c2.")
+          ? Buffer.from(encryptedConfig.slice(3), "base64url").toString("utf8")
+          : encryptedConfig,
+      )
+    : encryptedConfig;
   if (
     enableDecryption &&
     config.encrypted &&
@@ -718,8 +738,11 @@ function toYouTubeURL(userConfig, videoId, query) {
  * @returns {string}
  */
 function toManifestURL(req) {
+  const config = req.params.config.startsWith("c2.")
+    ? req.params.config
+    : `c2.${Buffer.from(req.params.config).toString("base64url")}`;
   return encodeURIComponent(
-    `${req.protocol}://${req.headers.host}/${encodeURIComponent(req.params.config)}/manifest.json`,
+    `${req.protocol}://${req.headers.host}/${config}/manifest.json`,
   );
 }
 
@@ -1417,6 +1440,12 @@ async function configurationPage(req, reply) {
                 const submitBtn = document.getElementById('submit-btn');
                 const errorDiv = document.getElementById('error-message');
                 const resultsDiv = document.getElementById('results');
+                function encodeConfig(config) {
+                    const bytes = new TextEncoder().encode(JSON.stringify(config));
+                    let binary = '';
+                    for (const byte of bytes) binary += String.fromCharCode(byte);
+                    return 'c2.' + btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+                }
                 function configChanged() {
                     resultsDiv.style.display = 'none';
                     addDefaults.disabled = cookies.value.length <= 0;
@@ -1703,7 +1732,7 @@ async function configurationPage(req, reply) {
                             id: ${JSON.stringify(prefix)} + pl.id,
                             ...(pl.sortOrder?.length ? { sortOrder: pl.sortOrder } : {})
                         }));
-                        const configPath = \`/\${encodeURIComponent(JSON.stringify({
+                        const configPath = \`/\${encodeConfig({
                             ...(cookies.value ? {encrypted: cookies.value} : {}),
                             ...(modifiedPlaylists.length ? { catalogs: modifiedPlaylists } : {}),
                             // Non-Sensitive Settings
@@ -1718,7 +1747,7 @@ async function configurationPage(req, reply) {
                                         return value != x.dataset.default ? [x.name, value] : null;
                                     }).filter(x => x !== null)
                             )
-                        }))}/\`;
+                        })}/\`;
                         const manifestPath = configPath + 'manifest.json';
                         installStremio.href = \`stremio://\${window.location.host}\${manifestPath}\`;
                         reload.href = window.location.origin + configPath + 'configure';

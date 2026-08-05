@@ -51,6 +51,9 @@ Enable `Allow in InPrivate`<br>
 <img width="1366" height="768" alt="Scroll to the bottom and click `Generate Install Link` to Generate the Manifest" src="https://github.com/user-attachments/assets/fb0a738a-9447-4de5-af34-18a3bb5bada1" /><br>
 <img width="1366" height="768" alt="Install in the way of your choosing" src="https://github.com/user-attachments/assets/e2857a18-06cc-481a-8564-bcc9de5c353f" /><br>
 
+> [!IMPORTANT]
+> The manifest URL is a credential-bearing URL when it contains encrypted cookies. Keep it private. After upgrading, generate a new manifest URL; old raw-JSON URLs may not work with playlist URLs.
+
 ---
 
 ## 🚀 Deployment
