@@ -1,21 +1,24 @@
 {
-  "name": "YouTubio",
-  "version": "0.14.7",
-  "description": "A Stremio addon that lets you watch YouTube videos and access your subscriptions, watch later list, and history directly inside Stremio.",
-  "main": "addon.js",
-  "scripts": {
-    "start": "node --env-file-if-exists=.env addon.js",
-    "local": "concurrently \"npm start\" \"npx ngrok http 7000\""
-  },
-  "dependencies": {
-    "close-with-grace": "^2.5.0",
-    "fastify": "^5.10.0",
-    "node-cache": "^5.1.2",
-    "yt-dlp-wrap-plus": "^2.4.3"
-  },
-  "devDependencies": {
-    "@types/node-cache": "^4.1.3",
-    "concurrently": "^10.0.4",
-    "ngrok": "^5.0.0-beta.2"
-  }
+	"name": "YouTubio",
+	"version": "0.14.7",
+	"description": "A Stremio addon that lets you watch YouTube videos and access your subscriptions, watch later list, and history directly inside Stremio.",
+	"main": "src/server.js",
+	"scripts": {
+		"start": "node --env-file-if-exists=.env addon.js",
+		"local": "concurrently \"npm start\" \"npx ngrok http 7000\"",
+		"format": "biome format --write .",
+		"check": "biome check --write"
+	},
+	"dependencies": {
+		"close-with-grace": "^2.5.0",
+		"fastify": "^5.10.0",
+		"node-cache": "^5.1.2",
+		"yt-dlp-wrap-plus": "^2.4.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.6",
+		"@types/node-cache": "^4.1.3",
+		"concurrently": "^10.0.4",
+		"ngrok": "^5.0.0-beta.2"
+	}
 }
