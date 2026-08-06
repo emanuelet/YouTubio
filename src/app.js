@@ -7,6 +7,9 @@ function buildApp() {
     logger: process.env.DEV_LOGGING
       ? {
           level: "debug",
+          transport: {
+            target: "pino-pretty",
+          },
           redact: ["req.headers.authorization", "req.headers.cookie"],
         }
       : false,
