@@ -7,7 +7,8 @@
 		"start": "node --env-file-if-exists=.env addon.js",
 		"local": "concurrently \"npm start\" \"npx ngrok http 7000\"",
 		"format": "biome format --write .",
-		"check": "biome check --write"
+		"check": "biome check --write",
+		"test": "node --test"
 	},
 	"dependencies": {
 		"close-with-grace": "^2.5.0",

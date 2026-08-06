@@ -32,7 +32,8 @@ const supportedWebsites = extractors.then(
  * @param {string[]} argsArray
  * @returns {Promise<Object>}
  */
-async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
+async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
+	log?.debug({ integration: "yt-dlp" }, "resolving media metadata");
 	const canCache = [channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex]
 		.map((r) => r.test(url))
 		.some(Boolean);
@@ -43,8 +44,10 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
 		canCache &&
 		!(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) &&
 		cached
-	)
+	) {
+		log?.debug({ integration: "yt-dlp", cacheHit: true }, "metadata cache hit");
 		return cached;
+	}
 	/** @type {string?} */
 	const cookies = userConfig.encrypted?.auth;
 	/** @type {string?} */
@@ -80,7 +83,14 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray) {
 			]),
 		);
 		if (canCache) cache.set(cacheKey, r);
+		log?.debug({ integration: "yt-dlp", cacheHit: false }, "metadata resolved");
 		return r;
+	} catch (error) {
+		log?.error(
+			{ errorType: error.constructor.name, integration: "yt-dlp" },
+			"metadata resolution failed",
+		);
+		throw error;
 	} finally {
 		try {
 			if (filename) await fs.unlink(filename);

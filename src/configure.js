@@ -1,4 +1,5 @@
-function registerConfigureRoutes(app, deps) {
+async function registerConfigureRoutes(app, deps) {
+	app.log.debug({ module: "configure" }, "registering route plugin");
 	const {
 		VERSION,
 		decryptConfig,
@@ -12,6 +13,10 @@ function registerConfigureRoutes(app, deps) {
 	} = deps;
 
 	async function configurationPage(req, reply) {
+		req.log.debug(
+			{ route: req.routeOptions.url },
+			"rendering configuration page",
+		);
 		/** @type {Object} */
 		let userConfig = {};
 		try {

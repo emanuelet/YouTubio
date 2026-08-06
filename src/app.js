@@ -1,0 +1,32 @@
+const Fastify = require("fastify");
+const registerRoutes = require("./routes");
+
+function buildApp() {
+  const app = Fastify({
+    trustProxy: true,
+    logger: process.env.DEV_LOGGING
+      ? {
+          level: "debug",
+          redact: ["req.headers.authorization", "req.headers.cookie"],
+        }
+      : false,
+    disableRequestLogging: !process.env.DEV_LOGGING,
+    routerOptions: { maxParamLength: 65_536 },
+  });
+
+  app.setErrorHandler((error, req, reply) => {
+    req.log.error(
+      { errorType: error.constructor.name, statusCode: error.statusCode },
+      "request failed",
+    );
+    const statusCode = error.validation ? 400 : (error.statusCode ?? 500);
+    return reply.code(statusCode).send({
+      error: statusCode >= 500 ? "Internal server error" : error.message,
+    });
+  });
+
+  app.register(registerRoutes);
+  return app;
+}
+
+module.exports = { buildApp };

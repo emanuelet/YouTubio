@@ -1,7 +1,7 @@
 const VERSION = require("../package.json").version;
 const { decryptConfig, encrypt } = require("./config");
 const { registerConfigureRoutes } = require("./configure");
-const { runYtDlpWithAuth, supportedWebsites } = require("./ytdlp");
+const { runYtDlpWithAuth: runYtDlp, supportedWebsites } = require("./ytdlp");
 
 const {
 	channelIDRegex,
@@ -17,7 +17,26 @@ const {
 } = require("./constants");
 const { cutM3U8 } = require("./m3u8");
 
-module.exports = function registerRoutes(app) {
+module.exports = async function registerRoutes(app) {
+	app.log.debug({ module: "routes" }, "registering route plugin");
+	const runYtDlpWithAuth = (...args) => runYtDlp(...args, app.log);
+	app.addHook("preHandler", async (req) => {
+		req.log.debug(
+			{ method: req.method, route: req.routeOptions.url },
+			"route started",
+		);
+	});
+	app.addHook("onResponse", async (req, reply) => {
+		req.log.debug(
+			{
+				method: req.method,
+				route: req.routeOptions.url,
+				statusCode: reply.statusCode,
+				responseTime: reply.elapsedTime,
+			},
+			"route completed",
+		);
+	});
 	/**
 	 * @typedef {{
 	 * titles: Array<{
@@ -47,6 +66,7 @@ module.exports = function registerRoutes(app) {
 	 * @returns {Promise<DeArrowResponse>}
 	 */
 	async function runDeArrow(videoID) {
+		app.log.debug({ integration: "dearrow" }, "fetching branding data");
 		if (process.env.NO_DEARROW) throw new Error("DeArrow Error: NO_DEARROW");
 		const res = await fetch(
 			`https://sponsor.ajay.app/api/branding?videoID=${videoID}`,
@@ -86,6 +106,7 @@ module.exports = function registerRoutes(app) {
 	 * @returns {Promise<Array<SponsorBlockSegment>>}
 	 */
 	async function getGeminiSegments(encryptedConfig, URL) {
+		app.log.debug({ integration: "gemini" }, "requesting fallback segments");
 		const userConfig = decryptConfig(encryptedConfig);
 		const geminiModel = userConfig.geminiModel ?? defaultConfig.geminiModel;
 		const geminiKey = userConfig.encrypted?.gemini;
@@ -175,6 +196,7 @@ module.exports = function registerRoutes(app) {
 	 * @returns {Promise<Array<SponsorBlockSegment>>}
 	 */
 	async function getSponsorBlockSegments(videoID, encryptedConfig) {
+		app.log.debug({ integration: "sponsorblock" }, "fetching segments");
 		if (process.env.NO_SPONSORBLOCK)
 			throw new Error("SponsorBlock Error: NO_SPONSORBLOCK");
 		const res = await fetch(
@@ -264,7 +286,10 @@ module.exports = function registerRoutes(app) {
 	 * @returns {void}
 	 */
 	function logError(error) {
-		if (process.env.DEV_LOGGING) console.error(error);
+		app.log.error(
+			{ errorType: error.constructor.name },
+			"route operation failed",
+		);
 	}
 
 	/**
@@ -982,7 +1007,7 @@ module.exports = function registerRoutes(app) {
 		}
 	});
 
-	registerConfigureRoutes(app, {
+	app.register(registerConfigureRoutes, {
 		VERSION,
 		decryptConfig,
 		defaultConfig,
