@@ -1011,7 +1011,7 @@ module.exports = async function registerRoutes(app) {
 		VERSION,
 		decryptConfig,
 		defaultConfig,
-		prefix,
+		addonPrefix: prefix,
 		termKeyword,
 		sortKeyword,
 		channelTypeArray,

@@ -4,7 +4,7 @@ async function registerConfigureRoutes(app, deps) {
 		VERSION,
 		decryptConfig,
 		defaultConfig,
-		prefix,
+		addonPrefix,
 		termKeyword,
 		sortKeyword,
 		channelTypeArray,
@@ -267,8 +267,8 @@ async function registerConfigureRoutes(app, deps) {
                 let playlists = ${JSON.stringify(
 									userConfig.catalogs?.map((pl) => ({
 										...pl,
-										id: pl.id.startsWith(prefix)
-											? pl.id.slice(prefix.length)
+										id: pl.id.startsWith(addonPrefix)
+											? pl.id.slice(addonPrefix.length)
 											: pl.id,
 									})) ?? [],
 								)};
@@ -531,7 +531,7 @@ async function registerConfigureRoutes(app, deps) {
                         gemini.disabled = true;
                         const modifiedPlaylists = playlists.map(pl => ({
                             ...pl,
-                            id: ${JSON.stringify(prefix)} + pl.id,
+								id: ${JSON.stringify(addonPrefix)} + pl.id,
                             ...(pl.sortOrder?.length ? { sortOrder: pl.sortOrder } : {})
                         }));
                         const configPath = \`/\${encodeConfig({

@@ -23,6 +23,13 @@ test("serves a Stremio manifest through inject", async () => {
 	assert.equal(response.json().id, "youtubio.elfhosted.com");
 });
 
+test("serves the configuration page at the root path", async () => {
+	const response = await app.inject({ method: "GET", url: "/" });
+
+	assert.equal(response.statusCode, 200);
+	assert.match(response.headers["content-type"], /^text\/html/);
+});
+
 test("handles CORS preflight through inject", async () => {
 	const response = await app.inject({ method: "OPTIONS", url: "/" });
 
