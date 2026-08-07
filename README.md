@@ -51,6 +51,9 @@ Enable `Allow in InPrivate`<br>
 <img width="1366" height="768" alt="Scroll to the bottom and click `Generate Install Link` to Generate the Manifest" src="https://github.com/user-attachments/assets/fb0a738a-9447-4de5-af34-18a3bb5bada1" /><br>
 <img width="1366" height="768" alt="Install in the way of your choosing" src="https://github.com/user-attachments/assets/e2857a18-06cc-481a-8564-bcc9de5c353f" /><br>
 
+> [!IMPORTANT]
+> The manifest URL is a credential-bearing URL when it contains encrypted cookies. Keep it private. After upgrading, generate a new manifest URL; old raw-JSON URLs may not work with playlist URLs.
+
 ---
 
 ## 🚀 Deployment
@@ -69,7 +72,7 @@ docker build -t youtubio .
 ### 🟢 Node.js Deployment
 
 #### ✅ Prerequisites
-- **Node.js** installed
+- **Node.js 24** installed
 - **npm** package manager
 - **[YT-DLP](https://github.com/yt-dlp/yt-dlp/releases/latest)** installed
 
@@ -84,10 +87,29 @@ npm start
 
 By default, the addon will be available at: `http://localhost:7000`
 
+## Environment Variables
+
+Copy `.env.example` to `.env` and set the values needed by your deployment. `npm start` loads `.env` automatically. For Docker, supply the file at runtime: `docker run --env-file .env -p 7000:7000 youtubio`.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `ENCRYPTION_KEY` | Random per process | Base64-encoded 32-byte key used to encrypt and decrypt user cookies and Gemini keys. Required for production so generated configuration URLs survive restarts. |
+| `PORT` | `7000` | HTTP listening port. |
+| `TTL` | `3600` | Cached yt-dlp metadata lifetime and Stremio catalog cache hint, in seconds. |
+| `SPACE_HOST` | Unset | Public hostname, without `https://`, shown in the startup configuration URL. |
+| `YTDLP_EXTRACTORS` | `all` | Value passed to yt-dlp's `--ies` option to restrict enabled extractors. |
+| `DEV_LOGGING` | Unset | Enables Fastify debug logs, error logging, and main-branch icon assets. |
+| `NO_DEARROW` | Unset | Disables DeArrow titles and thumbnails and hides its configuration option. |
+| `NO_SPONSORBLOCK` | Unset | Disables SponsorBlock and Gemini fallback and hides their configuration options. |
+| `EMBED` | Unset | Trusted HTML inserted into the configuration page. Do not set from untrusted input. |
+| `YTDLP_EXTRACTORS_EMBED` | Unset | Trusted HTML inserted into the supported-extractors section. Do not set from untrusted input. |
+
+For `DEV_LOGGING`, `NO_DEARROW`, and `NO_SPONSORBLOCK`, any non-empty value enables the option.
+
 ### ⚙️ ngrok Deployment
 
 #### ✅ Prerequisites
-- **Node.js** installed
+- **Node.js 24** installed
 - **npm** package manager
 - **[YT-DLP](https://github.com/yt-dlp/yt-dlp/releases/latest)** installed
 - ngrok account

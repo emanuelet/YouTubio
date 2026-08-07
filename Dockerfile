@@ -1,6 +1,4 @@
-# Use an official Node.js runtime as a parent image
-# Using the Long-Term Support (LTS) version is a good practice
-FROM node:22-slim
+FROM node:24-slim
 
 # Install Python and yt-dlp
 # We switch to root to perform these operations and then switch back to the node user.
@@ -19,8 +17,8 @@ WORKDIR /usr/src/app
 # so this step will be cached, speeding up future builds.
 COPY package*.json ./
 
-# Install app dependencies
-RUN npm install --omit=dev
+# Install the lockfile-resolved production dependencies
+RUN npm ci --omit=dev
 
 # Bundle app source
 # Copy the rest of your app's source code from your host to your image filesystem.
@@ -31,5 +29,5 @@ COPY . .
 EXPOSE 7000
 
 # Define the command to run your app
-# This uses the "start" script from your package.json
-CMD [ "npm", "start" ]
+# need to use node to have the executable receive signals properly, otherwise it will not terminate on SIGTERM and SIGINT
+CMD [ "node", "--env-file-if-exists=.env", "addon.js" ]
