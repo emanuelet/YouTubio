@@ -96,6 +96,7 @@ Copy `.env.example` to `.env` and set the values needed by your deployment. `npm
 | `ENCRYPTION_KEY` | Random per process | Base64-encoded 32-byte key used to encrypt and decrypt user cookies and Gemini keys. Required for production so generated configuration URLs survive restarts. |
 | `PORT` | `7000` | HTTP listening port. |
 | `TTL` | `3600` | Cached yt-dlp metadata lifetime and Stremio catalog cache hint, in seconds. |
+| `REDIS_URL` | Unset | Optional Redis URL for shared yt-dlp metadata caching. If Redis is unavailable, requests continue uncached. |
 | `SPACE_HOST` | Unset | Public hostname, without `https://`, shown in the startup configuration URL. |
 | `YTDLP_EXTRACTORS` | `all` | Value passed to yt-dlp's `--ies` option to restrict enabled extractors. |
 | `DEV_LOGGING` | Unset | Enables Fastify debug logs, error logging, and main-branch icon assets. |

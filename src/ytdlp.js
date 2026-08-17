@@ -1,11 +1,9 @@
 const YTDlpWrap = require("yt-dlp-wrap-plus").default;
+const crypto = require("node:crypto");
 const fs = require("node:fs").promises;
 const path = require("node:path");
 const tmpdir = require("node:os").tmpdir();
-const cache = new (require("node-cache"))({
-	stdTTL: process.env.TTL ?? 3600,
-	useClones: false,
-}); // Cache for 1 hour
+const cache = require("./cache");
 
 const { decryptConfig } = require("./config");
 const {
@@ -37,9 +35,19 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 	const canCache = [channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex]
 		.map((r) => r.test(url))
 		.some(Boolean);
-	const cacheKey = url + JSON.stringify(argsArray);
 	const userConfig = decryptConfig(encryptedConfig);
-	const cached = cache.get(cacheKey);
+	const cacheKey = `youtubio:yt-dlp:${crypto
+		.createHash("sha256")
+		.update(
+			JSON.stringify({
+				url,
+				argsArray,
+				userConfig,
+				ytdlpExtractors: process.env.YTDLP_EXTRACTORS ?? "all",
+			}),
+		)
+		.digest("hex")}`;
+	const cached = canCache ? await cache.get(cacheKey, log) : undefined;
 	if (
 		canCache &&
 		!(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) &&
@@ -82,7 +90,7 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 				...(cookies ? ["--cookies", filename] : []),
 			]),
 		);
-		if (canCache) cache.set(cacheKey, r);
+		if (canCache) await cache.set(cacheKey, r, log);
 		log?.debug({ integration: "yt-dlp", cacheHit: false }, "metadata resolved");
 		return r;
 	} catch (error) {
