@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { after, before, test } = require("node:test");
 const { buildApp } = require("../src/app");
+const { getCacheTTL } = require("../src/ytdlp");
 
 let app;
 
@@ -35,4 +36,22 @@ test("handles CORS preflight through inject", async () => {
 
 	assert.equal(response.statusCode, 204);
 	assert.equal(response.headers["access-control-allow-origin"], "*");
+});
+
+test("uses a short TTL for video search results", () => {
+	assert.equal(
+		getCacheTTL(
+			"https://www.youtube.com/results?search_query=redis&sp=CAASAhAB",
+		),
+		1200,
+	);
+});
+
+test("uses a long TTL for channel search results", () => {
+	assert.equal(
+		getCacheTTL(
+			"https://www.youtube.com/results?search_query=redis&sp=CAASAhAC",
+		),
+		432000,
+	);
 });

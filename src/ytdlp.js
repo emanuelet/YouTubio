@@ -5,6 +5,13 @@ const path = require("node:path");
 const tmpdir = require("node:os").tmpdir();
 const cache = require("./cache");
 
+const DEFAULT_TTL = Math.max(
+	1,
+	Number.parseInt(process.env.TTL ?? "3600", 10) || 3600,
+);
+const SEARCH_VIDEO_TTL = 20 * 60;
+const SEARCH_CHANNEL_TTL = 5 * 24 * 60 * 60;
+
 const { decryptConfig } = require("./config");
 const {
 	channelIDRegex,
@@ -32,9 +39,8 @@ const supportedWebsites = extractors.then(
  */
 async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 	log?.debug({ integration: "yt-dlp" }, "resolving media metadata");
-	const canCache = [channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex]
-		.map((r) => r.test(url))
-		.some(Boolean);
+	const cacheTTL = getCacheTTL(url);
+	const canCache = cacheTTL !== null;
 	const userConfig = decryptConfig(encryptedConfig);
 	const cacheKey = `youtubio:yt-dlp:${crypto
 		.createHash("sha256")
@@ -90,7 +96,7 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 				...(cookies ? ["--cookies", filename] : []),
 			]),
 		);
-		if (canCache) await cache.set(cacheKey, r, log);
+		if (canCache) await cache.set(cacheKey, r, cacheTTL, log);
 		log?.debug({ integration: "yt-dlp", cacheHit: false }, "metadata resolved");
 		return r;
 	} catch (error) {
@@ -106,4 +112,18 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 	}
 }
 
-module.exports = { runYtDlpWithAuth, supportedWebsites };
+function getCacheTTL(url) {
+	if (url.includes("youtube.com/results?search_query="))
+		return new URL(url).searchParams.get("sp")?.endsWith("AC")
+			? SEARCH_CHANNEL_TTL
+			: SEARCH_VIDEO_TTL;
+	if (
+		[channelRegex, channelIDRegex, playlistIDRegex, videoIDRegex]
+			.map((r) => r.test(url))
+			.some(Boolean)
+	)
+		return DEFAULT_TTL;
+	return null;
+}
+
+module.exports = { getCacheTTL, runYtDlpWithAuth, supportedWebsites };

@@ -55,11 +55,11 @@ async function get(key, log) {
 	}
 }
 
-async function set(key, value, log) {
+async function set(key, value, ttl = TTL, log) {
 	const redis = await getClient(log);
 	if (!redis) return;
 	try {
-		await redis.set(key, JSON.stringify(value), { EX: TTL });
+		await redis.set(key, JSON.stringify(value), { EX: ttl });
 	} catch (error) {
 		logCacheError(log, error);
 	}

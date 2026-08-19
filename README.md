@@ -105,6 +105,8 @@ Copy `.env.example` to `.env` and set the values needed by your deployment. `npm
 | `EMBED` | Unset | Trusted HTML inserted into the configuration page. Do not set from untrusted input. |
 | `YTDLP_EXTRACTORS_EMBED` | Unset | Trusted HTML inserted into the supported-extractors section. Do not set from untrusted input. |
 
+Search catalog results use fixed cache lifetimes: 20 minutes for video searches and 5 days for channel searches. Other cacheable metadata uses `TTL`.
+
 For `DEV_LOGGING`, `NO_DEARROW`, and `NO_SPONSORBLOCK`, any non-empty value enables the option.
 
 ### ⚙️ ngrok Deployment

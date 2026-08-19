@@ -1,7 +1,11 @@
 const VERSION = require("../package.json").version;
 const { decryptConfig, encrypt } = require("./config");
 const { registerConfigureRoutes } = require("./configure");
-const { runYtDlpWithAuth: runYtDlp, supportedWebsites } = require("./ytdlp");
+const {
+	getCacheTTL,
+	runYtDlpWithAuth: runYtDlp,
+	supportedWebsites,
+} = require("./ytdlp");
 
 const {
 	channelIDRegex,
@@ -645,14 +649,7 @@ module.exports = async function registerRoutes(app) {
 			const playlist = videos._type === "playlist";
 			const ref = req.headers.referrer;
 			const protocol = ref ? `${ref}#` : "stremio://";
-			const canCache = [
-				channelRegex,
-				channelIDRegex,
-				playlistIDRegex,
-				videoIDRegex,
-			]
-				.map((r) => r.test(url))
-				.some(Boolean);
+			const cacheTTL = getCacheTTL(url);
 			return reply.send({
 				metas: (
 					await Promise.all(
@@ -671,7 +668,7 @@ module.exports = async function registerRoutes(app) {
 					)
 				).filter((meta) => meta !== null),
 				behaviorHints: {
-					cacheMaxAge: canCache ? (process.env.TTL ?? 3600) : 0,
+					cacheMaxAge: cacheTTL ?? 0,
 				},
 			});
 		} catch (error) {
