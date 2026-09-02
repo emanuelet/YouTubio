@@ -73,6 +73,8 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 		if (filename) await fs.writeFile(filename, cookies);
 		const r = JSON.parse(
 			await ytDlpWrap.execPromise([
+				"--format",
+				"bestvideo+bestaudio/best",
 				...argsArray,
 				(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad)
 					? "--mark-watched"

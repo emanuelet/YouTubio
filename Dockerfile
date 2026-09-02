@@ -4,8 +4,8 @@ FROM node:24-slim
 # We switch to root to perform these operations and then switch back to the node user.
 USER root
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip && \
-    pip3 install "yt-dlp[default,curl-cffi]" --break-system-packages && \
+    apt-get install -y python3 python3-pip ffmpeg && \
+    pip3 install --upgrade "yt-dlp[default,curl-cffi]" --break-system-packages && \
     rm -rf /var/lib/apt/lists/*
 USER node
 
