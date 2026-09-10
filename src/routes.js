@@ -1,5 +1,6 @@
 const VERSION = require("../package.json").version;
 const { decryptConfig, encrypt } = require("./config");
+const configStore = require("./config-store");
 const { registerConfigureRoutes } = require("./configure");
 const {
 	getCacheTTL,
@@ -263,6 +264,20 @@ module.exports = async function registerRoutes(app) {
 		}
 	});
 
+	app.post("/configs", (req, reply) => {
+		try {
+			if (!req.body || typeof req.body !== "object")
+				return reply
+					.code(400)
+					.send({ error: "Configuration must be an object" });
+			const config = configStore.create(encrypt(JSON.stringify(req.body)));
+			return reply.code(201).send(config);
+		} catch (error) {
+			logError(error);
+			return reply.code(500).send({ error: "Configuration storage failed" });
+		}
+	});
+
 	// Get YouTube Playlists Endpoint
 	app.get("/:config/playlists", async (req, reply) => {
 		try {
@@ -291,7 +306,7 @@ module.exports = async function registerRoutes(app) {
 	 */
 	function logError(error) {
 		app.log.error(
-			{ errorType: error.constructor.name },
+			{ errorType: error.constructor.name, error: error.message },
 			"route operation failed",
 		);
 	}
@@ -516,9 +531,10 @@ module.exports = async function registerRoutes(app) {
 	 * @returns {string}
 	 */
 	function toManifestURL(req) {
-		const config = req.params.config.startsWith("c2.")
-			? req.params.config
-			: `c2.${Buffer.from(req.params.config).toString("base64url")}`;
+		const config =
+			req.params.config.startsWith("c2.") || req.params.config.startsWith("s3.")
+				? req.params.config
+				: `c2.${Buffer.from(req.params.config).toString("base64url")}`;
 		return encodeURIComponent(
 			`${req.protocol}://${req.headers.host}/${config}/manifest.json`,
 		);

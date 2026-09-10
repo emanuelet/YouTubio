@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { after, before, test } = require("node:test");
 const { buildApp } = require("../src/app");
+const { encrypt } = require("../src/config");
 const { getCacheTTL } = require("../src/ytdlp");
 
 let app;
@@ -29,6 +30,24 @@ test("serves the configuration page at the root path", async () => {
 
 	assert.equal(response.statusCode, 200);
 	assert.match(response.headers["content-type"], /^text\/html/);
+});
+
+test("stores encrypted configurations behind opaque IDs", async () => {
+	const response = await app.inject({
+		method: "POST",
+		url: "/configs",
+		payload: { encrypted: encrypt(JSON.stringify({ auth: "cookie-value" })) },
+	});
+
+	assert.equal(response.statusCode, 201);
+	assert.match(response.json().id, /^s3\.[A-Za-z0-9_-]{32}$/);
+
+	const manifest = await app.inject({
+		method: "GET",
+		url: `/${response.json().id}/manifest.json`,
+	});
+	assert.equal(manifest.statusCode, 200);
+	assert.equal(manifest.json().id, "youtubio.elfhosted.com");
 });
 
 test("handles CORS preflight through inject", async () => {

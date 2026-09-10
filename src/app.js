@@ -1,5 +1,6 @@
 const Fastify = require("fastify");
 const registerRoutes = require("./routes");
+const configStore = require("./config-store");
 
 function buildApp() {
 	const app = Fastify({
@@ -10,7 +11,11 @@ function buildApp() {
 					transport: {
 						target: "pino-pretty",
 					},
-					redact: ["req.headers.authorization", "req.headers.cookie"],
+					redact: [
+						"req.headers.authorization",
+						"req.headers.cookie",
+						"req.url",
+					],
 				}
 			: false,
 		disableRequestLogging: !process.env.DEV_LOGGING,
@@ -29,6 +34,7 @@ function buildApp() {
 	});
 
 	app.register(registerRoutes);
+	app.addHook("onClose", async () => configStore.close());
 	return app;
 }
 

@@ -19,19 +19,21 @@ async function registerConfigureRoutes(app, deps) {
 		);
 		/** @type {Object} */
 		let userConfig = {};
+		let configLoadError = false;
 		try {
 			userConfig = req.params.config
 				? decryptConfig(req.params.config, false)
 				: {};
 		} catch (error) {
 			logError(error);
+			configLoadError = true;
 		}
 		const catalogType = JSON.stringify(
 			userConfig.catalogType ?? defaultConfig.catalogType,
 		);
 		return reply.type("text/html").send(`
         <!DOCTYPE html>
-        <html>
+        <html lang="en">
         <head>
             <link rel="icon" href="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true">
             <title>YouTubio | ElfHosted</title>
@@ -40,6 +42,7 @@ async function registerConfigureRoutes(app, deps) {
                 body { font-family: 'Ubuntu', Helvetica, Arial, sans-serif; text-align: center; padding: 2rem; background: #f4f4f8; color: #333; }
                 .container { max-width: 50rem; margin: auto; background: white; padding: 2rem; border-radius: 1rem; }
                 h1 { color: #d92323; }
+				a { color: #3d247a; }
                 textarea { width: 100%; height: 15rem; padding: 1rem; border-radius: 1rem; border: 0.1rem solid #ccc; box-sizing: border-box; resize: vertical; }
                 th, td { border: 0.1rem solid #ccc; padding: 1rem; text-align: left; }
                 input { width: 100%; box-sizing: border-box; }
@@ -52,6 +55,15 @@ async function registerConfigureRoutes(app, deps) {
                 .toggle-container input[type="checkbox"] { margin-right: 1rem; }
                 .toggle-container label { cursor: pointer; }
                 .setting-description { color: #666; }
+                .config-status { margin: 1rem 0; color: #25603a; }
+                .table-scroll { overflow-x: auto; }
+                .table-scroll table { min-width: 42rem; }
+                #install-url { display: block; width: 100%; margin-top: 1rem; }
+                @media (max-width: 40rem) {
+                    body { padding: 0.75rem; }
+                    .container { padding: 1rem; }
+                    th, td { padding: 0.5rem; }
+                }
                 @media (prefers-color-scheme: dark) {
                     body { background: #121212; color: #e0e0e0; }
                     .container { background: #1e1e1e; }
@@ -66,6 +78,7 @@ async function registerConfigureRoutes(app, deps) {
                     .install-button:disabled { background-color: #555; }
                     .settings-section { background: #1e1e1e; border: 0.1rem solid #333; }
                     .setting-description { color: #aaa; }
+					a { color: #c4b5fd; }
                 }
             </style>
         </head>
@@ -78,13 +91,12 @@ async function registerConfigureRoutes(app, deps) {
                 <h3 style="color: #f5a623;">v${VERSION}</h3>
                 ${process.env.EMBED ?? ""}
                 For a quick setup guide, go to <a href="https://github.com/xXCrash2BomberXx/YouTubio#%EF%B8%8F-quick-setup-with-cookies" target="_blank" rel="noopener noreferrer">github.com/xXCrash2BomberXx/YouTubio</a>
+                ${configLoadError ? '<p class="error" role="alert">This configuration is unavailable or expired. Create a new one to continue.</p>' : userConfig.encrypted ? '<p class="config-status" role="status">Existing configuration loaded. Clear sensitive fields to replace them.</p>' : ""}
                 <form id="config-form">
                     <div class="settings-section">
                         <details style="text-align: center;">
-                            <summary>
-                                This addon supports FAR more than just YouTube with URLs!<br>
-                                <a href="https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md" target="_blank" rel="noopener noreferrer">Read more here.</a>
-                            </summary>
+                            <summary>This addon supports FAR more than just YouTube with URLs.</summary>
+                            <p><a href="https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md" target="_blank" rel="noopener noreferrer">Read more here.</a></p>
                             ${process.env.YTDLP_EXTRACTORS_EMBED ?? ""}
                             <div style="max-height: 20rem; overflow: auto;">
                                 ${await supportedWebsites}
@@ -94,11 +106,14 @@ async function registerConfigureRoutes(app, deps) {
                     <div class="settings-section">
                         <h3>Cookies</h3>
                         <hr>
-                        <textarea id="cookie-data" placeholder="Paste the content of your cookies.txt file here..."${userConfig.encrypted ? ` disabled>${userConfig.encrypted ?? ""}` : ">"}</textarea>
+                        <label for="cookie-data">Cookies.txt</label>
+                        <p class="setting-description">Paste a fresh export from your signed-in browser. It is encrypted before being saved.</p>
+                        <textarea id="cookie-data" placeholder="Paste the content of your cookies.txt file here..." spellcheck="false"${userConfig.encrypted ? " disabled>" : ">"}</textarea>
                         <h3>Gemini API Key</h3>
                         <hr>
-                        <input type="text" id="gemini" name="gemini" placeholder="Enter your Gemini API key here..."${userConfig.encrypted ? " disabled" : ""}>
-                        <button type="button" class="install-button" id="clear-cookies">Clear</button>
+                        <label for="gemini">Gemini API key</label>
+                        <input type="password" id="gemini" name="gemini" placeholder="Enter your Gemini API key here..." autocomplete="off" spellcheck="false"${userConfig.encrypted ? " disabled" : ""}>
+                        <button type="button" class="install-button" id="clear-cookies">Clear sensitive fields</button>
                     </div>
                     <div class="settings-section">
                         <h3>Playlists</h3>
@@ -132,6 +147,7 @@ async function registerConfigureRoutes(app, deps) {
                             <button type="button" id="add-accounts" class="install-button">Load from YouTube</button>
                             <button type="button" id="add-playlist" class="install-button">Add Playlist</button>
                         </div>
+                        <div class="table-scroll">
                         <table id="playlist-table" style="width:100%;border-collapse:collapse;">
                             <thead>
                                 <tr>
@@ -145,10 +161,12 @@ async function registerConfigureRoutes(app, deps) {
                             </thead>
                             <tbody></tbody>
                         </table>
+                        </div>
                     </div>
                     <div class="settings-section" id="addon-settings">
                         <h3>Settings</h3>
                         <hr>
+                        <div class="table-scroll">
                         <table>
                             <thead>
                                 <tr>
@@ -220,8 +238,9 @@ async function registerConfigureRoutes(app, deps) {
                                 </tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
-                    <button type="submit" class="install-button" id="submit-btn">Generate Install Link</button>
+                    <button type="submit" class="install-button" id="submit-btn">Save Configuration & Generate Link</button>
                     <div id="error-message" class="error" style="display:none;"></div>
                 </form>
                 <div id="results" style="display:none;">
@@ -230,12 +249,15 @@ async function registerConfigureRoutes(app, deps) {
                     <a href="#" target="_blank" id="install-web" class="install-button">Stremio Web</a>
                     <a id="copy-btn" class="install-button">Copy URL</a>
                     <a href="#" id="reload" class="install-button">Reload</a>
-                    <input type="text" id="install-url" style="display: none;" readonly class="url-input">
+                    <p id="config-expiry" class="setting-description"></p>
+                    <label for="install-url">Manifest URL</label>
+                    <input type="text" id="install-url" readonly class="url-input">
                 </div>
             </div>
             <script>
                 const cookies = document.getElementById('cookie-data');
                 const gemini = document.getElementById('gemini');
+                let encrypted = ${JSON.stringify(userConfig.encrypted ?? "")};
                 const addAccounts = document.getElementById('add-accounts')
                 const addDefaults = document.getElementById('add-defaults');
                 const addonSettings = document.getElementById('addon-settings');
@@ -250,7 +272,7 @@ async function registerConfigureRoutes(app, deps) {
                 }
                 function configChanged() {
                     resultsDiv.style.display = 'none';
-                    addDefaults.disabled = cookies.value.length <= 0;
+                    addDefaults.disabled = !encrypted && cookies.value.length <= 0;
                     addAccounts.disabled = addDefaults.disabled;
                 }
                 const installStremio = document.getElementById('install-stremio');
@@ -274,6 +296,7 @@ async function registerConfigureRoutes(app, deps) {
 								)};
                 document.getElementById('clear-cookies').addEventListener('click', () => {
                     cookies.value = "";
+                    encrypted = "";
                     cookies.disabled = false;
                     gemini.value = "";
                     gemini.disabled = false;
@@ -285,7 +308,9 @@ async function registerConfigureRoutes(app, deps) {
                 function makeActions(callback, array, index) {
                     const actionsCell = document.createElement('td');
                     const upBtn = document.createElement('button');
+					upBtn.type = 'button';
                     upBtn.textContent = '↑';
+					upBtn.setAttribute('aria-label', 'Move ' + array[index].name + ' up');
                     upBtn.classList.add('install-button');
                     upBtn.style.margin = '0.2rem';
                     upBtn.addEventListener('click', () => {
@@ -295,7 +320,9 @@ async function registerConfigureRoutes(app, deps) {
                         }
                     });
                     const downBtn = document.createElement('button');
+					downBtn.type = 'button';
                     downBtn.textContent = '↓';
+					downBtn.setAttribute('aria-label', 'Move ' + array[index].name + ' down');
                     downBtn.classList.add('install-button');
                     downBtn.style.margin = '0.2rem';
                     downBtn.addEventListener('click', () => {
@@ -305,7 +332,9 @@ async function registerConfigureRoutes(app, deps) {
                         }
                     });
                     const removeBtn = document.createElement('button');
+					removeBtn.type = 'button';
                     removeBtn.textContent = 'Remove';
+					removeBtn.setAttribute('aria-label', 'Remove ' + array[index].name);
                     removeBtn.classList.add('install-button');
                     removeBtn.style.margin = '0.2rem';
                     removeBtn.addEventListener('click', () => {
@@ -517,7 +546,7 @@ async function registerConfigureRoutes(app, deps) {
                     try {
                         // Encrypt the sensitive data
                         if ((cookies.value && !cookies.disabled) || (gemini.value && !gemini.disabled))
-                            cookies.value = await (await fetch('/encrypt', {
+                            const encryptionResponse = await fetch('/encrypt', {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json'
@@ -526,7 +555,9 @@ async function registerConfigureRoutes(app, deps) {
                                     auth: cookies.value,
                                     gemini: gemini.value
                                 })
-                            })).text();
+							});
+							if (!encryptionResponse.ok) throw new Error('Could not encrypt sensitive fields');
+							encrypted = await encryptionResponse.text();
                         cookies.disabled = true;
                         gemini.disabled = true;
                         const modifiedPlaylists = playlists.map(pl => ({
@@ -534,8 +565,8 @@ async function registerConfigureRoutes(app, deps) {
 								id: ${JSON.stringify(addonPrefix)} + pl.id,
                             ...(pl.sortOrder?.length ? { sortOrder: pl.sortOrder } : {})
                         }));
-                        const configPath = \`/\${encodeConfig({
-                            ...(cookies.value ? {encrypted: cookies.value} : {}),
+						const config = {
+							...(encrypted ? {encrypted} : {}),
                             ...(modifiedPlaylists.length ? { catalogs: modifiedPlaylists } : {}),
                             // Non-Sensitive Settings
                             ...Object.fromEntries(
@@ -549,11 +580,20 @@ async function registerConfigureRoutes(app, deps) {
                                         return value != x.dataset.default ? [x.name, value] : null;
                                     }).filter(x => x !== null)
                             )
-                        })}/\`;
+						};
+						const response = await fetch('/configs', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify(config)
+						});
+						if (!response.ok) throw new Error('Could not save configuration');
+						const { id, expiresAt } = await response.json();
+						const configPath = \`/\${id}/\`;
                         const manifestPath = configPath + 'manifest.json';
                         installStremio.href = \`stremio://\${window.location.host}\${manifestPath}\`;
                         reload.href = window.location.origin + configPath + 'configure';
                         installUrlInput.value = window.location.origin + manifestPath;
+						document.getElementById('config-expiry').textContent = 'Configuration expires ' + new Date(expiresAt).toLocaleDateString() + '.';
                         installWeb.href = \`https://web.stremio.com/#/addons?addon=\${encodeURIComponent(installUrlInput.value)}\`;
                         resultsDiv.style.display = 'block';
                     } catch (error) {

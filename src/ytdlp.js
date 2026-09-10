@@ -5,9 +5,10 @@ const path = require("node:path");
 const tmpdir = require("node:os").tmpdir();
 const cache = require("./cache");
 
-const DEFAULT_TTL = Math.max(
+const DEFAULT_CACHE_TTL = Math.max(
 	1,
-	Number.parseInt(process.env.TTL ?? "3600", 10) || 3600,
+	Number.parseInt(process.env.CACHE_TTL ?? process.env.TTL ?? "3600", 10) ||
+		3600,
 );
 const SEARCH_VIDEO_TTL = 20 * 60;
 const SEARCH_CHANNEL_TTL = 5 * 24 * 60 * 60;
@@ -103,7 +104,11 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 		return r;
 	} catch (error) {
 		log?.error(
-			{ errorType: error.constructor.name, integration: "yt-dlp" },
+			{
+				errorType: error.constructor.name,
+				error: error.message,
+				integration: "yt-dlp",
+			},
 			"metadata resolution failed",
 		);
 		throw error;
@@ -124,7 +129,7 @@ function getCacheTTL(url) {
 			.map((r) => r.test(url))
 			.some(Boolean)
 	)
-		return DEFAULT_TTL;
+		return DEFAULT_CACHE_TTL;
 	return null;
 }
 

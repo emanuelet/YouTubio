@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const zlib = require("node:zlib");
 const { channelTypeArray } = require("./constants");
+const configStore = require("./config-store");
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 	? Buffer.from(process.env.ENCRYPTION_KEY, "base64")
@@ -62,6 +63,14 @@ function decrypt(encryptedData) {
 }
 
 function decryptConfig(encryptedConfig, enableDecryption = true) {
+	if (
+		typeof encryptedConfig === "string" &&
+		encryptedConfig.startsWith("s3.")
+	) {
+		const ciphertext = configStore.read(encryptedConfig);
+		if (!ciphertext) throw new Error("Configuration not found or expired");
+		encryptedConfig = decrypt(ciphertext);
+	}
 	const config =
 		typeof encryptedConfig === "string"
 			? JSON.parse(
@@ -90,6 +99,7 @@ function decryptConfig(encryptedConfig, enableDecryption = true) {
 module.exports = {
 	decryptConfig,
 	encrypt,
+	decrypt,
 	encryptionKey: ENCRYPTION_KEY,
 	hasEncryptionKey: Boolean(process.env.ENCRYPTION_KEY),
 };

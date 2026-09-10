@@ -1,7 +1,11 @@
 const { createClient } = require("redis");
 
 const REDIS_URL = process.env.REDIS_URL;
-const TTL = Math.max(1, Number.parseInt(process.env.TTL ?? "3600", 10) || 3600);
+const CACHE_TTL = Math.max(
+	1,
+	Number.parseInt(process.env.CACHE_TTL ?? process.env.TTL ?? "3600", 10) ||
+		3600,
+);
 const RETRY_DELAY = 30_000;
 
 let client;
@@ -55,7 +59,7 @@ async function get(key, log) {
 	}
 }
 
-async function set(key, value, ttl = TTL, log) {
+async function set(key, value, ttl = CACHE_TTL, log) {
 	const redis = await getClient(log);
 	if (!redis) return;
 	try {
