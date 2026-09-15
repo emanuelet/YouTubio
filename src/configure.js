@@ -382,13 +382,13 @@ async function registerConfigureRoutes(app, deps) {
                         // Search Type
                         const channelTypeCell = document.createElement('td');
                         const channelTypeInput = document.createElement('select');
-                        ${JSON.stringify(channelTypeArray)}.forEach((type, index) => {
+                        ${JSON.stringify(channelTypeArray)}.forEach(type => {
                             const option = document.createElement('option');
-                            option.value = index;
+                            option.value = type;
                             option.textContent = type.charAt(0).toUpperCase() + type.slice(1);
                             channelTypeInput.appendChild(option);
                         });
-                        channelTypeInput.defaultValue = 0;
+                        channelTypeInput.value = pl.channelType ?? 'auto';
                         channelTypeInput.addEventListener('change', () => {
                             pl.channelType = channelTypeInput.value;
                             configChanged();
@@ -520,13 +520,24 @@ async function registerConfigureRoutes(app, deps) {
                 addAccounts.addEventListener('click', async e => {
                     const originalDisabled = e.target.disabled;
                     e.target.disabled = true;
-                    if (!reload.href.endsWith('configure'))
-                        await populateInstall();
-                    (await (await fetch(reload.href.replace(/configure$/, 'playlists'))).json()).forEach(p =>
-                        playlists.push({ type: ${catalogType}, id: p.id, name: p.name, channelType: 'auto' })
-                    );
-                    renderPlaylists();
-                    e.target.disabled = originalDisabled;
+                    errorDiv.style.display = 'none';
+                    try {
+                        if (!reload.href.endsWith('configure'))
+                            await populateInstall();
+                        const response = await fetch(reload.href.replace(/configure$/, 'playlists'));
+                        if (!response.ok) throw new Error('Could not load playlists from YouTube. Refresh your cookies and try again.');
+                        const importedPlaylists = await response.json();
+                        if (!Array.isArray(importedPlaylists)) throw new Error('Could not load playlists from YouTube.');
+                        playlists.push(...importedPlaylists.map(p =>
+                            ({ type: ${catalogType}, id: p.id, name: p.name, channelType: 'auto' })
+                        ));
+                        renderPlaylists();
+                    } catch (error) {
+                        errorDiv.textContent = error.message;
+                        errorDiv.style.display = 'block';
+                    } finally {
+                        e.target.disabled = originalDisabled;
+                    }
                 });
                 addDefaults.addEventListener('click', () => {
                     playlists = [...playlists, ...defaultPlaylists];
