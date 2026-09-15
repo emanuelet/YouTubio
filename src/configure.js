@@ -40,7 +40,7 @@ async function registerConfigureRoutes(app, deps) {
             <link href="https://fonts.googleapis.com/css2?family=Ubuntu&display=swap" rel="stylesheet">
             <style>
                 body { font-family: 'Ubuntu', Helvetica, Arial, sans-serif; text-align: center; padding: 2rem; background: #f4f4f8; color: #333; }
-                .container { max-width: 50rem; margin: auto; background: white; padding: 2rem; border-radius: 1rem; }
+                .container { max-width: 72rem; margin: auto; background: white; padding: 2rem; border-radius: 1rem; }
                 h1 { color: #d92323; }
 				a { color: #3d247a; }
                 textarea { width: 100%; height: 15rem; padding: 1rem; border-radius: 1rem; border: 0.1rem solid #ccc; box-sizing: border-box; resize: vertical; }
@@ -59,10 +59,16 @@ async function registerConfigureRoutes(app, deps) {
                 .table-scroll { overflow-x: auto; }
                 .table-scroll table { min-width: 42rem; }
                 #install-url { display: block; width: 100%; margin-top: 1rem; }
+                #results { grid-template-columns: auto minmax(20rem, 1fr); gap: 1rem 2rem; align-items: center; text-align: left; }
+                #results h2 { grid-column: 1 / -1; margin: 0; }
+                .result-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+                .result-actions .install-button { margin-top: 0; }
+                .result-details { min-width: 0; }
                 @media (max-width: 40rem) {
                     body { padding: 0.75rem; }
                     .container { padding: 1rem; }
                     th, td { padding: 0.5rem; }
+                    #results { grid-template-columns: 1fr; }
                 }
                 @media (prefers-color-scheme: dark) {
                     body { background: #121212; color: #e0e0e0; }
@@ -245,13 +251,17 @@ async function registerConfigureRoutes(app, deps) {
                 </form>
                 <div id="results" style="display:none;">
                     <h2>Install your addon</h2>
-                    <a href="#" target="_blank" id="install-stremio" class="install-button">Stremio</a>
-                    <a href="#" target="_blank" id="install-web" class="install-button">Stremio Web</a>
-                    <a id="copy-btn" class="install-button">Copy URL</a>
-                    <a href="#" id="reload" class="install-button">Reload</a>
-                    <p id="config-expiry" class="setting-description"></p>
-                    <label for="install-url">Manifest URL</label>
-                    <input type="text" id="install-url" readonly class="url-input">
+                    <div class="result-actions">
+                        <a href="#" target="_blank" id="install-stremio" class="install-button">Stremio</a>
+                        <a href="#" target="_blank" id="install-web" class="install-button">Stremio Web</a>
+                        <a id="copy-btn" class="install-button">Copy URL</a>
+                        <a href="#" id="reload" class="install-button">Reload</a>
+                    </div>
+                    <div class="result-details">
+                        <p id="config-expiry" class="setting-description"></p>
+                        <label for="install-url">Manifest URL</label>
+                        <input type="text" id="install-url" readonly class="url-input">
+                    </div>
                 </div>
             </div>
             <script>
@@ -309,7 +319,7 @@ async function registerConfigureRoutes(app, deps) {
                     const actionsCell = document.createElement('td');
                     const upBtn = document.createElement('button');
 					upBtn.type = 'button';
-                    upBtn.textContent = '↑';
+					upBtn.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>';
 					upBtn.setAttribute('aria-label', 'Move ' + array[index].name + ' up');
                     upBtn.classList.add('install-button');
                     upBtn.style.margin = '0.2rem';
@@ -321,7 +331,7 @@ async function registerConfigureRoutes(app, deps) {
                     });
                     const downBtn = document.createElement('button');
 					downBtn.type = 'button';
-                    downBtn.textContent = '↓';
+					downBtn.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
 					downBtn.setAttribute('aria-label', 'Move ' + array[index].name + ' down');
                     downBtn.classList.add('install-button');
                     downBtn.style.margin = '0.2rem';
@@ -333,7 +343,7 @@ async function registerConfigureRoutes(app, deps) {
                     });
                     const removeBtn = document.createElement('button');
 					removeBtn.type = 'button';
-                    removeBtn.textContent = 'Remove';
+					removeBtn.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v4M14 11v4"/></svg>';
 					removeBtn.setAttribute('aria-label', 'Remove ' + array[index].name);
                     removeBtn.classList.add('install-button');
                     removeBtn.style.margin = '0.2rem';
@@ -607,7 +617,7 @@ async function registerConfigureRoutes(app, deps) {
                         installUrlInput.value = window.location.origin + manifestPath;
 						document.getElementById('config-expiry').textContent = 'Configuration expires ' + new Date(expiresAt).toLocaleDateString() + '.';
                         installWeb.href = \`https://web.stremio.com/#/addons?addon=\${encodeURIComponent(installUrlInput.value)}\`;
-                        resultsDiv.style.display = 'block';
+                        resultsDiv.style.display = 'grid';
                     } catch (error) {
                         errorDiv.textContent = error.message;
                         errorDiv.style.display = 'block';
