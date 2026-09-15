@@ -556,7 +556,7 @@ async function registerConfigureRoutes(app, deps) {
                     errorDiv.style.display = 'none';
                     try {
                         // Encrypt the sensitive data
-                        if ((cookies.value && !cookies.disabled) || (gemini.value && !gemini.disabled))
+                        if ((cookies.value && !cookies.disabled) || (gemini.value && !gemini.disabled)) {
                             const encryptionResponse = await fetch('/encrypt', {
                                 method: 'POST',
                                 headers: {
@@ -569,6 +569,7 @@ async function registerConfigureRoutes(app, deps) {
 							});
 							if (!encryptionResponse.ok) throw new Error('Could not encrypt sensitive fields');
 							encrypted = await encryptionResponse.text();
+                        }
                         cookies.disabled = true;
                         gemini.disabled = true;
                         const modifiedPlaylists = playlists.map(pl => ({

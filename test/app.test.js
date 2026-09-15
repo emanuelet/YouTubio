@@ -32,6 +32,14 @@ test("serves the configuration page at the root path", async () => {
 	assert.match(response.headers["content-type"], /^text\/html/);
 });
 
+test("renders a syntactically valid configuration script", async () => {
+	const response = await app.inject({ method: "GET", url: "/" });
+	const script = response.body.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+
+	assert.ok(script);
+	assert.doesNotThrow(() => new Function(script));
+});
+
 test("stores encrypted configurations behind opaque IDs", async () => {
 	const response = await app.inject({
 		method: "POST",
