@@ -38,33 +38,41 @@ const supportedWebsites = extractors.then(
  * @param {string[]} argsArray
  * @returns {Promise<Object>}
  */
-async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
+async function runYtDlpWithAuth(
+	url,
+	encryptedConfig,
+	argsArray,
+	log,
+	execute = (args) => ytDlpWrap.execPromise(args),
+) {
 	log?.debug({ integration: "yt-dlp" }, "resolving media metadata");
 	const cacheTTL = getCacheTTL(url);
 	const canCache = cacheTTL !== null;
 	const userConfig = decryptConfig(encryptedConfig);
+	const publicSearch = isPublicSearchURL(url);
+	const markWatched =
+		!publicSearch &&
+		(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad);
 	const cacheKey = `youtubio:yt-dlp:${crypto
 		.createHash("sha256")
 		.update(
 			JSON.stringify({
 				url,
 				argsArray,
-				userConfig,
+				userConfig: publicSearch
+					? { ...userConfig, encrypted: undefined }
+					: userConfig,
 				ytdlpExtractors: process.env.YTDLP_EXTRACTORS ?? "all",
 			}),
 		)
 		.digest("hex")}`;
 	const cached = canCache ? await cache.get(cacheKey, log) : undefined;
-	if (
-		canCache &&
-		!(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad) &&
-		cached
-	) {
+	if (canCache && !markWatched && cached) {
 		log?.debug({ integration: "yt-dlp", cacheHit: true }, "metadata cache hit");
 		return cached;
 	}
 	/** @type {string?} */
-	const cookies = userConfig.encrypted?.auth;
+	const cookies = publicSearch ? null : userConfig.encrypted?.auth;
 	/** @type {string?} */
 	const filename = cookies
 		? path.join(tmpdir, `cookies-${Date.now()}-${counter++}.txt`)
@@ -73,13 +81,11 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 	try {
 		if (filename) await fs.writeFile(filename, cookies);
 		const r = JSON.parse(
-			await ytDlpWrap.execPromise([
+			await execute([
 				"--format",
 				"bestvideo+bestaudio/best",
 				...argsArray,
-				(userConfig.markWatchedOnLoad ?? defaultConfig.markWatchedOnLoad)
-					? "--mark-watched"
-					: "--no-mark-watched",
+				markWatched ? "--mark-watched" : "--no-mark-watched",
 				url,
 				"--js-runtimes",
 				"node",
@@ -119,8 +125,21 @@ async function runYtDlpWithAuth(url, encryptedConfig, argsArray, log) {
 	}
 }
 
+function isPublicSearchURL(url) {
+	try {
+		const parsed = new URL(url);
+		return (
+			["youtube.com", "www.youtube.com"].includes(parsed.hostname) &&
+			parsed.pathname === "/results" &&
+			parsed.searchParams.has("search_query")
+		);
+	} catch {
+		return false;
+	}
+}
+
 function getCacheTTL(url) {
-	if (url.includes("youtube.com/results?search_query="))
+	if (isPublicSearchURL(url))
 		return new URL(url).searchParams.get("sp")?.endsWith("AC")
 			? SEARCH_CHANNEL_TTL
 			: SEARCH_VIDEO_TTL;

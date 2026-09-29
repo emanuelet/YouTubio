@@ -10,9 +10,49 @@ async function registerConfigureRoutes(app, deps) {
 		channelTypeArray,
 		supportedWebsites,
 		logError,
+		privateMode,
 	} = deps;
 
 	async function configurationPage(req, reply) {
+		if (privateMode.enabled && !req.params?.token && !req.params?.config)
+			return reply.type("text/html").send(`<!DOCTYPE html>
+<html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>YouTubio private access</title><link rel="icon" href="/icon.png">
+<style>
+  body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #f4f4f8; color: #25232b; font: 1rem Ubuntu, Helvetica, Arial, sans-serif; }
+  main { width: min(100% - 2rem, 26rem); padding: 2rem; border-radius: 1rem; background: #fff; box-shadow: 0 0.6rem 2rem #19132918; box-sizing: border-box; }
+  img { width: 5rem; display: block; margin: 0 auto 1rem; }
+  h1 { margin: 0 0 0.5rem; color: #d92323; text-align: center; }
+  p { line-height: 1.5; }
+  label { display: block; margin: 1.5rem 0 0.5rem; font-weight: bold; }
+  input { box-sizing: border-box; width: 100%; padding: 0.75rem; border: 1px solid #777; border-radius: 0.35rem; background: inherit; color: inherit; font: inherit; }
+  button { margin-top: 1rem; width: 100%; padding: 0.75rem; border: 0; border-radius: 0.35rem; background: #5835b0; color: #fff; font: inherit; font-weight: bold; cursor: pointer; }
+  button:hover { background: #4a2c93; }
+  :focus-visible { outline: 3px solid #d92323; outline-offset: 2px; }
+  #error { color: #a31b1b; margin-bottom: 0; }
+  @media (prefers-color-scheme: dark) { body { background: #121212; color: #e0e0e0; } main { background: #1e1e1e; } input { border-color: #777; } }
+</style></head>
+<body><main><img src="/icon.png" alt="YouTubio"><h1>YouTubio</h1><p>Enter the shared password to create a private Stremio install link.</p><form id="unlock">
+<label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required autofocus>
+<button type="submit">Unlock</button><p id="error" role="alert"></p></form></main>
+<script>
+document.getElementById('unlock').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const response = await fetch('/private/unlock', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ password: document.getElementById('password').value })
+    });
+    document.getElementById('password').value = '';
+    if (!response.ok) {
+        document.getElementById('error').textContent = response.status === 429 ? 'Try again in one minute.' : 'Incorrect password.';
+        return;
+    }
+    const {token} = await response.json();
+    window.location.assign('/private/setup/' + token);
+});
+</script></body></html>`);
+		const accessToken = privateMode.enabled
+			? (req.params?.token ?? privateMode.tokenFromConfig(req.params?.config))
+			: null;
 		req.log.debug(
 			{ route: req.routeOptions.url },
 			"rendering configuration page",
@@ -35,7 +75,8 @@ async function registerConfigureRoutes(app, deps) {
         <!DOCTYPE html>
         <html lang="en">
         <head>
-            <link rel="icon" href="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true">
+			<meta name="viewport" content="width=device-width, initial-scale=1">
+            <link rel="icon" href="/icon.png">
             <title>YouTubio | ElfHosted</title>
             <link href="https://fonts.googleapis.com/css2?family=Ubuntu&display=swap" rel="stylesheet">
             <style>
@@ -91,13 +132,14 @@ async function registerConfigureRoutes(app, deps) {
         <body>
             <div class="container">
                 <div style="display: flex; justify-content: center; margin: 1rem; align-items: center;">
-                    <img src="https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true" alt="YouTubio">
+                    <img src="/icon.png" alt="YouTubio">
                     <h1 style="position: relative; top: 96px; left: -80px; font-size: 32px;">ElfHosted</h1>
                 </div>
                 <h3 style="color: #f5a623;">v${VERSION}</h3>
                 ${process.env.EMBED ?? ""}
                 For a quick setup guide, go to <a href="https://github.com/xXCrash2BomberXx/YouTubio#%EF%B8%8F-quick-setup-with-cookies" target="_blank" rel="noopener noreferrer">github.com/xXCrash2BomberXx/YouTubio</a>
-                ${configLoadError ? '<p class="error" role="alert">This configuration is unavailable or expired. Create a new one to continue.</p>' : userConfig.encrypted ? '<p class="config-status" role="status">Existing configuration loaded. Clear sensitive fields to replace them.</p>' : ""}
+				${configLoadError ? '<p class="error" role="alert">This configuration is unavailable. Create a new one to continue.</p>' : userConfig.encrypted ? '<p class="config-status" role="status">Existing configuration loaded. Clear sensitive fields to replace them.</p>' : ""}
+				${accessToken ? '<p class="setting-description">This install link grants private access. Share it only with trusted users.</p><button type="button" class="install-button" id="revoke-access">Revoke this access token</button>' : ""}
                 <form id="config-form">
                     <div class="settings-section">
                         <details style="text-align: center;">
@@ -115,7 +157,7 @@ async function registerConfigureRoutes(app, deps) {
                         <label for="cookie-data">Cookies.txt</label>
                         <p class="setting-description">Paste a fresh export from your signed-in browser. It is encrypted before being saved.</p>
                         <textarea id="cookie-data" placeholder="Paste the content of your cookies.txt file here..." spellcheck="false"${userConfig.encrypted ? " disabled>" : ">"}</textarea>
-                        <h3>Gemini API Key</h3>
+                        <h3>Gemini API Key (Optional)</h3>
                         <hr>
                         <label for="gemini">Gemini API key</label>
                         <input type="password" id="gemini" name="gemini" placeholder="Enter your Gemini API key here..." autocomplete="off" spellcheck="false"${userConfig.encrypted ? " disabled" : ""}>
@@ -169,8 +211,8 @@ async function registerConfigureRoutes(app, deps) {
                         </table>
                         </div>
                     </div>
-                    <div class="settings-section" id="addon-settings">
-                        <h3>Settings</h3>
+                    <details class="settings-section" id="addon-settings">
+                        <summary style="cursor: pointer; font-size: 1.17em; font-weight: bold;">Advanced Settings</summary>
                         <hr>
                         <div class="table-scroll">
                         <table>
@@ -235,7 +277,7 @@ async function registerConfigureRoutes(app, deps) {
                                 <tr>
                                     <td><input type="text" id="catalogType" name="catalogType" data-default=${JSON.stringify(defaultConfig.catalogType)} value=${catalogType} style="width: 5rem;"></td>
                                     <td><label for="catalogType">YouTube Search Type</label></td>
-                                    <td class="setting-description">Specify the fallback type name of catalogs.</td>
+                                    <td class="setting-description">Specify the fallback type name of catalogs. (how it appears in Stremio)</td>
                                 </tr>
                                 <tr>
                                     <td><input type="text" id="geminiModel" name="geminiModel" data-default=${JSON.stringify(defaultConfig.geminiModel)} value=${JSON.stringify(userConfig.geminiModel ?? defaultConfig.geminiModel)} style="width: 5rem;"></td>
@@ -245,7 +287,7 @@ async function registerConfigureRoutes(app, deps) {
                             </tbody>
                         </table>
                         </div>
-                    </div>
+                    </details>
                     <button type="submit" class="install-button" id="submit-btn">Save Configuration & Generate Link</button>
                     <div id="error-message" class="error" style="display:none;"></div>
                 </form>
@@ -258,7 +300,7 @@ async function registerConfigureRoutes(app, deps) {
                         <a href="#" id="reload" class="install-button">Reload</a>
                     </div>
                     <div class="result-details">
-                        <p id="config-expiry" class="setting-description"></p>
+						<p class="setting-description">Saved configurations${accessToken ? " and private install links" : ""} stay valid until access is revoked. Expired YouTube cookies may need refreshing for account-only feeds; public search works without them.</p>
                         <label for="install-url">Manifest URL</label>
                         <input type="text" id="install-url" readonly class="url-input">
                     </div>
@@ -267,6 +309,13 @@ async function registerConfigureRoutes(app, deps) {
             <script>
                 const cookies = document.getElementById('cookie-data');
                 const gemini = document.getElementById('gemini');
+				const accessToken = ${JSON.stringify(accessToken)};
+				const privateHeaders = accessToken ? { Authorization: 'Bearer ' + accessToken } : {};
+				if (accessToken) document.getElementById('revoke-access').addEventListener('click', async () => {
+					if (!window.confirm('Revoke every install link created with this access token?')) return;
+					const response = await fetch('/private/revoke', { method: 'POST', headers: privateHeaders });
+					if (response.ok) window.location.assign('/');
+				});
                 let encrypted = ${JSON.stringify(userConfig.encrypted ?? "")};
                 const addAccounts = document.getElementById('add-accounts')
                 const addDefaults = document.getElementById('add-defaults');
@@ -570,7 +619,7 @@ async function registerConfigureRoutes(app, deps) {
                             const encryptionResponse = await fetch('/encrypt', {
                                 method: 'POST',
                                 headers: {
-                                    'Content-Type': 'application/json'
+									'Content-Type': 'application/json', ...privateHeaders
                                 },
                                 body: JSON.stringify({
                                     auth: cookies.value,
@@ -605,17 +654,16 @@ async function registerConfigureRoutes(app, deps) {
 						};
 						const response = await fetch('/configs', {
 							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
+							headers: { 'Content-Type': 'application/json', ...privateHeaders },
 							body: JSON.stringify(config)
 						});
 						if (!response.ok) throw new Error('Could not save configuration');
-						const { id, expiresAt } = await response.json();
-						const configPath = \`/\${id}/\`;
+						const { id } = await response.json();
+						const configPath = '/' + (accessToken ? 'p1.' + accessToken + '.' : '') + id + '/';
                         const manifestPath = configPath + 'manifest.json';
                         installStremio.href = \`stremio://\${window.location.host}\${manifestPath}\`;
                         reload.href = window.location.origin + configPath + 'configure';
                         installUrlInput.value = window.location.origin + manifestPath;
-						document.getElementById('config-expiry').textContent = 'Configuration expires ' + new Date(expiresAt).toLocaleDateString() + '.';
                         installWeb.href = \`https://web.stremio.com/#/addons?addon=\${encodeURIComponent(installUrlInput.value)}\`;
                         resultsDiv.style.display = 'grid';
                     } catch (error) {
@@ -639,6 +687,7 @@ async function registerConfigureRoutes(app, deps) {
 	}
 
 	app.get("/", configurationPage);
+	if (privateMode.enabled) app.get("/private/setup/:token", configurationPage);
 	app.get("/:config/configure", configurationPage);
 }
 

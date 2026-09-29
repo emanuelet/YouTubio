@@ -98,7 +98,8 @@ Copy `.env.example` to `.env` and set the values needed by your deployment. `npm
 | `CACHE_TTL` | `3600` | Cached yt-dlp metadata lifetime and Stremio catalog cache hint, in seconds. `TTL` remains supported for existing deployments. |
 | `REDIS_URL` | Unset | Optional Redis URL for shared yt-dlp metadata caching. If Redis is unavailable, requests continue uncached. |
 | `CONFIG_DB_PATH` | XDG state directory | SQLite path for encrypted server-side configurations. Set to `/data/youtubio.sqlite` and mount `/data` persistently in Docker/Coolify. |
-| `CONFIG_TTL_SECONDS` | `2592000` | Lifetime of stored configurations, in seconds (30 days). Expired configuration URLs stop working and must be regenerated. |
+| `PRIVATE_MODE` | Unset | Set to `1` to require a password before generating protected Stremio addon links. Existing unprotected links stop working. |
+| `PRIVATE_MODE_PASSWORD` | Unset | Shared password for private mode (at least 16 characters). Keep it secret and stable; changing it invalidates previously issued access tokens. |
 | `SPACE_HOST` | Unset | Public hostname, without `https://`, shown in the startup configuration URL. |
 | `YTDLP_EXTRACTORS` | `all` | Value passed to yt-dlp's `--ies` option to restrict enabled extractors. |
 | `DEV_LOGGING` | Unset | Enables Fastify debug logs, error logging, and main-branch icon assets. |
@@ -108,6 +109,8 @@ Copy `.env.example` to `.env` and set the values needed by your deployment. `npm
 | `YTDLP_EXTRACTORS_EMBED` | Unset | Trusted HTML inserted into the supported-extractors section. Do not set from untrusted input. |
 
 Search catalog results use fixed cache lifetimes: 20 minutes for video searches and 5 days for channel searches. Other cacheable metadata uses `TTL`.
+
+Private mode issues a separate access token on each successful password entry. Stremio cannot supply a password on every request, so generated addon URLs carry that token and should be treated as credentials. Installed links do not expire; the configuration page can revoke all links issued from one password entry. Changing `PRIVATE_MODE_PASSWORD` also invalidates existing tokens. Use HTTPS and preserve the SQLite database, `ENCRYPTION_KEY`, and private-mode password when moving between servers. Direct media URLs returned by yt-dlp may still be accessible at their original providers; private mode protects this addon's endpoints. Public YouTube searches run without cookies, so expired Google sessions do not prevent searching; account-only feeds still require valid cookies.
 
 For `DEV_LOGGING`, `NO_DEARROW`, and `NO_SPONSORBLOCK`, any non-empty value enables the option.
 

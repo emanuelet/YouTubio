@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { after, before, test } = require("node:test");
 const { buildApp } = require("../src/app");
 const { encrypt } = require("../src/config");
-const { getCacheTTL } = require("../src/ytdlp");
+const { getCacheTTL, runYtDlpWithAuth } = require("../src/ytdlp");
 
 let app;
 
@@ -23,6 +23,18 @@ test("serves a Stremio manifest through inject", async () => {
 
 	assert.equal(response.statusCode, 200);
 	assert.equal(response.json().id, "youtubio.elfhosted.com");
+	assert.equal(response.json().version, "0.14.14");
+	assert.equal(response.json().logo, "http://localhost:80/icon.png");
+});
+
+test("serves the repository icon as PNG", async () => {
+	const response = await app.inject({ method: "GET", url: "/icon.png" });
+	assert.equal(response.statusCode, 200);
+	assert.match(response.headers["content-type"], /^image\/png/);
+	assert.equal(
+		response.rawPayload.subarray(0, 8).toString("hex"),
+		"89504e470d0a1a0a",
+	);
 });
 
 test("serves the configuration page at the root path", async () => {
@@ -30,6 +42,13 @@ test("serves the configuration page at the root path", async () => {
 
 	assert.equal(response.statusCode, 200);
 	assert.match(response.headers["content-type"], /^text\/html/);
+	assert.match(
+		response.body,
+		/<details class="settings-section" id="addon-settings">/,
+	);
+	assert.match(response.body, /Advanced Settings/);
+	assert.match(response.body, /Gemini API Key \(Optional\)/);
+	assert.match(response.body, /gemini-3\.1-pro-preview/);
 });
 
 test("renders a syntactically valid configuration script", async () => {
@@ -81,4 +100,37 @@ test("uses a long TTL for channel search results", () => {
 		),
 		432000,
 	);
+});
+
+test("public YouTube searches ignore expired cookies without disabling private feeds", async () => {
+	const config = {
+		encrypted: { auth: "invalid Google cookies" },
+		markWatchedOnLoad: true,
+	};
+	let searchArgs;
+	await runYtDlpWithAuth(
+		"https://www.youtube.com/results?search_query=hello&sp=CAASAhAB",
+		config,
+		[],
+		undefined,
+		async (args) => {
+			searchArgs = args;
+			return JSON.stringify({ entries: [] });
+		},
+	);
+	assert.equal(searchArgs.includes("--cookies"), false);
+	assert.equal(searchArgs.includes("--no-mark-watched"), true);
+
+	let privateArgs;
+	await runYtDlpWithAuth(
+		":ytwatchlater",
+		config,
+		[],
+		undefined,
+		async (args) => {
+			privateArgs = args;
+			return JSON.stringify({ entries: [] });
+		},
+	);
+	assert.equal(privateArgs.includes("--cookies"), true);
 });

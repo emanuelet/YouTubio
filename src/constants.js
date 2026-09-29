@@ -16,7 +16,7 @@ const defaultConfig = {
 	showBrokenLinks: false,
 	search: true,
 	catalogType: "YouTube",
-	geminiModel: "gemini-2.5-pro",
+	geminiModel: "gemini-3.1-pro-preview",
 };
 const termKeyword = "{term}";
 const sortKeyword = "{sort}";

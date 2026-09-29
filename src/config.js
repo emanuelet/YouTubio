@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const zlib = require("node:zlib");
 const { channelTypeArray } = require("./constants");
 const configStore = require("./config-store");
+const { unwrapConfig } = require("./private-mode");
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 	? Buffer.from(process.env.ENCRYPTION_KEY, "base64")
@@ -63,12 +64,14 @@ function decrypt(encryptedData) {
 }
 
 function decryptConfig(encryptedConfig, enableDecryption = true) {
+	if (typeof encryptedConfig === "string")
+		encryptedConfig = unwrapConfig(encryptedConfig);
 	if (
 		typeof encryptedConfig === "string" &&
 		encryptedConfig.startsWith("s3.")
 	) {
 		const ciphertext = configStore.read(encryptedConfig);
-		if (!ciphertext) throw new Error("Configuration not found or expired");
+		if (!ciphertext) throw new Error("Configuration not found");
 		encryptedConfig = decrypt(ciphertext);
 	}
 	const config =

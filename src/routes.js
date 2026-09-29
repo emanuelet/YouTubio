@@ -1,6 +1,9 @@
 const VERSION = require("../package.json").version;
+const fs = require("node:fs");
+const path = require("node:path");
 const { decryptConfig, encrypt } = require("./config");
 const configStore = require("./config-store");
+const privateMode = require("./private-mode");
 const { registerConfigureRoutes } = require("./configure");
 const {
 	getCacheTTL,
@@ -24,8 +27,30 @@ const { cutM3U8 } = require("./m3u8");
 
 module.exports = async function registerRoutes(app) {
 	app.log.debug({ module: "routes" }, "registering route plugin");
+	privateMode.validateSetup();
 	const runYtDlpWithAuth = (...args) => runYtDlp(...args, app.log);
-	app.addHook("preHandler", async (req) => {
+	const failedUnlocks = new Map();
+	app.addHook("preHandler", async (req, reply) => {
+		if (privateMode.enabled && req.method !== "OPTIONS") {
+			const route = req.routeOptions.url;
+			if (
+				route !== "/" &&
+				route !== "/private/unlock" &&
+				route !== "/icon.png"
+			) {
+				const token = req.params?.config
+					? privateMode.tokenFromConfig(req.params.config)
+					: route === "/private/setup/:token"
+						? req.params.token
+						: route === "/stream/:url"
+							? req.query.access
+							: req.headers.authorization?.match(
+									/^Bearer ([A-Za-z0-9_-]{43})$/,
+								)?.[1];
+				if (!configStore.validAccessToken(token))
+					return reply.code(401).send({ error: "Private access required" });
+			}
+		}
 		req.log.debug(
 			{ method: req.method, route: req.routeOptions.url },
 			"route started",
@@ -219,9 +244,38 @@ module.exports = async function registerRoutes(app) {
 		reply.header("Access-Control-Allow-Origin", "*");
 		reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 		reply.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+		if (privateMode.enabled) {
+			reply.header("Cache-Control", "private, no-store");
+			reply.header("Referrer-Policy", "no-referrer");
+		}
 	});
 
 	app.options("*", async (_req, reply) => reply.code(204).send());
+	const icon = fs.readFileSync(path.join(__dirname, "../icon.png"));
+	app.get("/icon.png", (_req, reply) => reply.type("image/png").send(icon));
+
+	app.post("/private/unlock", (req, reply) => {
+		if (!privateMode.enabled) return reply.code(404).send();
+		const key = req.ip;
+		const now = Date.now();
+		const failures = failedUnlocks.get(key) ?? { count: 0, until: 0 };
+		if (failures.until > now)
+			return reply.code(429).send({ error: "Try again later" });
+		if (!privateMode.correctPassword(req.body?.password)) {
+			failures.count += 1;
+			failures.until = failures.count >= 5 ? now + 60_000 : 0;
+			failedUnlocks.set(key, failures);
+			return reply.code(401).send({ error: "Incorrect password" });
+		}
+		failedUnlocks.delete(key);
+		return reply.send({ token: configStore.createAccessToken() });
+	});
+
+	app.post("/private/revoke", (req, reply) => {
+		const token = req.headers.authorization?.slice("Bearer ".length);
+		configStore.revokeAccessToken(token);
+		return reply.code(204).send();
+	});
 
 	app.get("/stream/:url", async (req, reply) => {
 		try {
@@ -423,7 +477,7 @@ module.exports = async function registerRoutes(app) {
 				types: [...new Set(catalogs.map((c) => c.type))],
 				idPrefixes: [prefix],
 				catalogs,
-				logo: `https://github.com/xXCrash2BomberXx/YouTubio/blob/${process.env.DEV_LOGGING ? "main" : `v${VERSION}`}/icon.png?raw=true`,
+				logo: `${req.protocol}://${req.headers.host}/icon.png`,
 				behaviorHints: {
 					configurable: true,
 				},
@@ -532,7 +586,9 @@ module.exports = async function registerRoutes(app) {
 	 */
 	function toManifestURL(req) {
 		const config =
-			req.params.config.startsWith("c2.") || req.params.config.startsWith("s3.")
+			req.params.config.startsWith("c2.") ||
+			req.params.config.startsWith("s3.") ||
+			privateMode.tokenFromConfig(req.params.config)
 				? req.params.config
 				: `c2.${Buffer.from(req.params.config).toString("base64url")}`;
 		return encodeURIComponent(
@@ -761,7 +817,7 @@ module.exports = async function registerRoutes(app) {
 											(userConfig.overestimate ?? defaultConfig.overestimate)
 												? "&overestimate=1"
 												: ""
-										}`,
+										}${userConfig.accessToken ? `&access=${userConfig.accessToken}` : ""}`,
 										behaviorHints: {
 											...base.behaviorHints,
 											bingeGroup: `SB Player ${src.resolution}`,
@@ -828,6 +884,9 @@ module.exports = async function registerRoutes(app) {
 			if (!req.params.id?.startsWith(prefix))
 				throw new Error(`Unknown ID in Meta handler: "${req.params.id}"`);
 			const userConfig = decryptConfig(req.params.config, false);
+			userConfig.accessToken = privateMode.enabled
+				? privateMode.tokenFromConfig(req.params.config)
+				: undefined;
 			const video = await runYtDlpWithAuth(
 				toYouTubeURL(userConfig, req.params.id, {}),
 				req.params.config,
@@ -956,6 +1015,9 @@ module.exports = async function registerRoutes(app) {
 			if (!req.params.id?.startsWith(prefix))
 				throw new Error(`Unknown ID in Stream handler: "${req.params.id}"`);
 			const userConfig = decryptConfig(req.params.config, false);
+			userConfig.accessToken = privateMode.enabled
+				? privateMode.tokenFromConfig(req.params.config)
+				: undefined;
 			const video = await runYtDlpWithAuth(
 				toYouTubeURL(userConfig, req.params.id, {}),
 				req.params.config,
@@ -1030,5 +1092,6 @@ module.exports = async function registerRoutes(app) {
 		channelTypeArray,
 		supportedWebsites,
 		logError,
+		privateMode,
 	});
 };
