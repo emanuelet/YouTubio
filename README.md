@@ -96,7 +96,7 @@ Copy `.env.example` to `.env` and set the values needed by your deployment. `npm
 | `ENCRYPTION_KEY` | Random per process | Base64-encoded 32-byte key used to encrypt and decrypt user cookies and Gemini keys. Required for production so generated configuration URLs survive restarts. |
 | `PORT` | `7000` | HTTP listening port. |
 | `CACHE_TTL` | `3600` | Cached yt-dlp metadata lifetime and Stremio catalog cache hint, in seconds. `TTL` remains supported for existing deployments. |
-| `REDIS_URL` | Unset | Optional Redis URL for shared yt-dlp metadata caching. If Redis is unavailable, requests continue uncached. |
+| `REDIS_URL` | Unset | Optional Redis URL for shared yt-dlp metadata caching. A bounded in-process cache is used without Redis or when it is unavailable. |
 | `CONFIG_DB_PATH` | XDG state directory | SQLite path for encrypted server-side configurations. Set to `/data/youtubio.sqlite` and mount `/data` persistently in Docker/Coolify. |
 | `PRIVATE_MODE` | Unset | Set to `1` to require a password before generating protected Stremio addon links. Existing unprotected links stop working. |
 | `PRIVATE_MODE_PASSWORD` | Unset | Shared password for private mode (at least 16 characters). Keep it secret and stable; changing it invalidates previously issued access tokens. |
@@ -108,7 +108,7 @@ Copy `.env.example` to `.env` and set the values needed by your deployment. `npm
 | `EMBED` | Unset | Trusted HTML inserted into the configuration page. Do not set from untrusted input. |
 | `YTDLP_EXTRACTORS_EMBED` | Unset | Trusted HTML inserted into the supported-extractors section. Do not set from untrusted input. |
 
-Search catalog results use fixed cache lifetimes: 20 minutes for video searches and 5 days for channel searches. Other cacheable metadata uses `TTL`.
+Search catalogs return 20 results per page using Stremio's `skip` parameter. Search results use fixed cache lifetimes: 20 minutes for video searches and 5 days for channel searches. Other cacheable metadata uses `TTL`. The in-process cache holds up to 100 entries or 32 MiB per instance and is cleared on restart.
 
 Private mode issues a separate access token on each successful password entry. Stremio cannot supply a password on every request, so generated addon URLs carry that token and should be treated as credentials. Installed links do not expire; the configuration page can revoke all links issued from one password entry. Changing `PRIVATE_MODE_PASSWORD` also invalidates existing tokens. Use HTTPS and preserve the SQLite database, `ENCRYPTION_KEY`, and private-mode password when moving between servers. Direct media URLs returned by yt-dlp may still be accessible at their original providers; private mode protects this addon's endpoints. Public YouTube searches run without cookies, so expired Google sessions do not prevent searching; account-only feeds still require valid cookies.
 

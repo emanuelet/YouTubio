@@ -152,4 +152,9 @@ function getCacheTTL(url) {
 	return null;
 }
 
-module.exports = { getCacheTTL, runYtDlpWithAuth, supportedWebsites };
+module.exports = {
+	getCacheTTL,
+	isPublicSearchURL,
+	runYtDlpWithAuth,
+	supportedWebsites,
+};

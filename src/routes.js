@@ -7,6 +7,7 @@ const privateMode = require("./private-mode");
 const { registerConfigureRoutes } = require("./configure");
 const {
 	getCacheTTL,
+	isPublicSearchURL,
 	runYtDlpWithAuth: runYtDlp,
 	supportedWebsites,
 } = require("./ytdlp");
@@ -710,11 +711,12 @@ module.exports = async function registerRoutes(app) {
 			);
 			const skip = parseInt(query.skip ?? 0, 10);
 			const url = toYouTubeURL(userConfig, req.params.id, query);
+			const pageSize = isPublicSearchURL(url) ? 20 : 100;
 			const videos = await runYtDlpWithAuth(url, req.params.config, [
 				"-I",
 				query.genre?.startsWith(reversedPrefix)
-					? `${-(skip + 1)}:${-(skip + 100)}:-1`
-					: `${skip + 1}:${skip + 100}:1`,
+					? `${-(skip + 1)}:${-(skip + pageSize)}:-1`
+					: `${skip + 1}:${skip + pageSize}:1`,
 				"--yes-playlist",
 			]);
 			const useID = videos.webpage_url_domain === "youtube.com";
